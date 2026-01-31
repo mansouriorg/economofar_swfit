@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct MainTabView: View {
-    // On garde notre SessionManager accessible
     @EnvironmentObject var sessionManager: SessionManager
     
     var body: some View {
@@ -18,13 +17,12 @@ struct MainTabView: View {
                     Label("Historique", systemImage: "list.bullet.clipboard")
                 }
             
-            // Onglet 3 : Profil (On mettra un placeholder pour l'instant)
-            Text("Paramètres à venir")
+            // ✅ Onglet 3 : Paramètres (Mis à jour)
+            SettingsView()
                 .tabItem {
                     Label("Paramètres", systemImage: "gearshape.fill")
                 }
         }
-        // Couleur des icônes actives
         .tint(.blue)
     }
 }
