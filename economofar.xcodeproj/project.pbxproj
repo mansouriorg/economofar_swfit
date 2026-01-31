@@ -10,9 +10,22 @@
 		F10D2D5C2F2E240200F8C029 /* economofar.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = economofar.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		F10D2E122F2E458500F8C029 /* Exceptions for "economofar" folder in "economofar" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Resources/Info.plist,
+			);
+			target = F10D2D5B2F2E240200F8C029 /* economofar */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		F10D2D5E2F2E240200F8C029 /* economofar */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				F10D2E122F2E458500F8C029 /* Exceptions for "economofar" folder in "economofar" target */,
+			);
 			path = economofar;
 			sourceTree = "<group>";
 		};
