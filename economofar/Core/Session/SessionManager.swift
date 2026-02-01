@@ -6,7 +6,10 @@ class SessionManager: ObservableObject {
     @Published var isLoggedIn: Bool = false
     @Published var currentUser: User?
     
-    // ✅ NOUVEAU : État de chargement initial (pour le Splash Screen)
+    // ✅ NEW: Stocker le token pour les appels API
+    @Published var token: String?
+    
+    // État de chargement initial (pour le Splash Screen)
     @Published var isLoading: Bool = true
     
     init() {
@@ -16,26 +19,25 @@ class SessionManager: ObservableObject {
     func checkLoginStatus() {
         // ICI: Plus tard, on vérifiera le Token dans le Keychain
         
-        // ✅ MISE À JOUR : On simule un délai de chargement de 2 secondes
-        // Cela permet d'afficher le Splash Screen avant de décider si on montre le Login ou le Dashboard
+        // Simulation d'un délai de chargement de 2 secondes
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             // Pour l'instant, on force "non connecté" après le chargement
             self.isLoggedIn = false
-            
-            // Le chargement est terminé, l'interface va changer
             self.isLoading = false
         }
     }
     
-    func login(user: User) {
-        // Appelé quand le login réussit
+    // ✅ UPDATE: On accepte le token ici
+    func login(user: User, token: String) {
         self.currentUser = user
+        self.token = token // On sauvegarde le token
         self.isLoggedIn = true
     }
     
     func logout() {
         // Appelé quand on clique sur "Se déconnecter"
         self.currentUser = nil
+        self.token = nil // On efface le token
         self.isLoggedIn = false
     }
 }
