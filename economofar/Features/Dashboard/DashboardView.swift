@@ -1,11 +1,22 @@
 import SwiftUI
+import PhotosUI // ✅ NÉCESSAIRE POUR LA GALERIE
 
 struct DashboardView: View {
     @EnvironmentObject var sessionManager: SessionManager
-    @StateObject private var viewModel = DashboardViewModel()
     
-    // Pour la navigation vers le Scanner
-    @State private var showScanner = false
+    // Si tu n'as pas encore créé ce ViewModel, tu peux le commenter pour l'instant
+    // @StateObject private var viewModel = DashboardViewModel()
+    
+    // Pour l'exemple, j'utilise une liste vide si le viewModel n'existe pas
+    // Assure-toi que ton modèle Receipt existe bien dans tes dossiers
+    @State var recentReceipts: [Receipt] = []
+    
+    // --- ÉTATS POUR L'UPLOAD IMAGE & IA ---
+    @State private var selectedPhotoItem: PhotosPickerItem? = nil
+    @State private var selectedImage: UIImage? = nil
+    @State private var isAnalyzing = false
+    @State private var analysisResult: String = ""
+    @State private var showResultSheet = false // Pour afficher le résultat
     
     var body: some View {
         NavigationStack {
@@ -66,13 +77,16 @@ struct DashboardView: View {
                         
                         ScrollView {
                             VStack(spacing: 15) {
-                                ForEach(viewModel.recentReceipts) { receipt in
-                                    // ✅ MISE À JOUR : Navigation vers le détail
-                                    NavigationLink(destination: ReceiptDetailView(receipt: receipt)) {
-                                        ReceiptRow(receipt: receipt)
-                                            // Important : Force la couleur noire (sinon le lien devient bleu)
-                                            .foregroundColor(.primary)
-                                    }
+                                // J'utilise la variable locale ou ton viewModel ici
+                                ForEach(recentReceipts) { receipt in
+                                    ReceiptRow(receipt: receipt)
+                                }
+                                
+                                // Un message vide si pas de tickets
+                                if recentReceipts.isEmpty {
+                                    Text("Aucun ticket récent")
+                                        .foregroundColor(.gray)
+                                        .padding(.top, 20)
                                 }
                             }
                             .padding(.horizontal)
@@ -81,17 +95,25 @@ struct DashboardView: View {
                     }
                 }
                 
-                // --- BOUTON FLOTTANT (SCANNER) ---
+                // --- BOUTON FLOTTANT (SCANNER / GALERIE) ---
                 VStack {
                     Spacer()
-                    Button(action: {
-                        showScanner = true
-                    }) {
+                    
+                    // ✅ MODIFICATION : Le bouton devient un PhotosPicker
+                    PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
                         HStack {
-                            Image(systemName: "camera.viewfinder")
-                                .font(.title2)
-                            Text("Scanner un ticket")
-                                .fontWeight(.bold)
+                            if isAnalyzing {
+                                ProgressView()
+                                    .tint(.white)
+                                    .padding(.trailing, 5)
+                                Text("Analyse en cours...")
+                                    .fontWeight(.bold)
+                            } else {
+                                Image(systemName: "camera.viewfinder")
+                                    .font(.title2)
+                                Text("Scanner / Galerie")
+                                    .fontWeight(.bold)
+                            }
                         }
                         .foregroundColor(.white)
                         .padding(.vertical, 15)
@@ -100,7 +122,19 @@ struct DashboardView: View {
                         .cornerRadius(30)
                         .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 5)
                     }
+                    .disabled(isAnalyzing) // On empêche de cliquer si ça charge
                     .padding(.bottom, 20)
+                    // ✅ ACTION QUAND L'IMAGE EST CHOISIE
+                    .onChange(of: selectedPhotoItem) { newItem in
+                        Task {
+                            if let data = try? await newItem?.loadTransferable(type: Data.self),
+                               let image = UIImage(data: data) {
+                                self.selectedImage = image
+                                // On lance l'analyse vers Java + Ollama
+                                analyzeReceipt(image: image)
+                            }
+                        }
+                    }
                 }
             }
             // Bouton de déconnexion dans la barre de navigation
@@ -113,16 +147,81 @@ struct DashboardView: View {
                     .foregroundColor(.red)
                 }
             }
-            // Navigation vers le Scanner
-            .navigationDestination(isPresented: $showScanner) {
-                ScannerView()
-                    .navigationBarBackButtonHidden(true)
+            // ✅ FENÊTRE DE RÉSULTAT (SHEET)
+            .sheet(isPresented: $showResultSheet) {
+                ResultView(image: selectedImage, resultText: analysisResult, isPresented: $showResultSheet)
+            }
+        }
+    }
+    
+    // --- FONCTION DE LIEN AVEC JAVA ---
+    func analyzeReceipt(image: UIImage) {
+        isAnalyzing = true
+        
+        Task {
+            do {
+                // Appel au ImageService (Backend Java)
+                let response = try await ImageService.uploadImage(image: image)
+                
+                // Succès !
+                self.analysisResult = response.analysis
+                self.showResultSheet = true // On ouvre la fenêtre de résultat
+                
+            } catch {
+                print("Erreur UI: \(error)")
+                self.analysisResult = "Erreur : Impossible de joindre le serveur.\n(Vérifie que Java et Ollama tournent !)"
+                self.showResultSheet = true
+            }
+            isAnalyzing = false
+        }
+    }
+}
+
+// --- VUE POUR AFFICHER LE RÉSULTAT (MODALE) ---
+struct ResultView: View {
+    var image: UIImage?
+    var resultText: String
+    @Binding var isPresented: Bool
+    
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(spacing: 20) {
+                    if let img = image {
+                        Image(uiImage: img)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(height: 250)
+                            .cornerRadius(12)
+                    }
+                    
+                    VStack(alignment: .leading) {
+                        Text("Résultat de l'IA (Ollama) :")
+                            .font(.headline)
+                            .padding(.bottom, 5)
+                        
+                        Text(resultText)
+                            .font(.system(.body, design: .monospaced)) // Police style code
+                            .padding()
+                            .background(Color.gray.opacity(0.1))
+                            .cornerRadius(8)
+                    }
+                    .padding()
+                }
+            }
+            .navigationTitle("Analyse")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                Button("Fermer") {
+                    isPresented = false
+                }
             }
         }
     }
 }
 
-// Une petite vue pour afficher une ligne de ticket (Sub-view)
+// --- COMPOSANT ROW ---
+// Si tu as aussi une erreur "Redeclaration of ReceiptRow", supprime aussi ce bloc ci-dessous.
 struct ReceiptRow: View {
     let receipt: Receipt
     
@@ -135,6 +234,7 @@ struct ReceiptRow: View {
                 .cornerRadius(10)
             
             VStack(alignment: .leading) {
+                // Assure-toi que ton modèle Receipt a bien ces champs (merchantName, date)
                 Text(receipt.merchantName ?? "Inconnu")
                     .fontWeight(.semibold)
                 Text(receipt.date.formatted(date: .numeric, time: .omitted))
@@ -152,9 +252,4 @@ struct ReceiptRow: View {
         .cornerRadius(15)
         .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
     }
-}
-
-#Preview {
-    DashboardView()
-        .environmentObject(SessionManager())
 }
