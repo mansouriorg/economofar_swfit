@@ -14,7 +14,7 @@ class TicketService: ObservableObject {
     // ⚠️ Rappel : localhost pour simulateur, IP locale (ex: 192.168.1.15) pour iPhone réel.
     private let baseURL = "http://localhost:8080/api/v1/tickets"
     
-    // MARK: - Fetch History
+    // MARK: - 1. Fetch History
     func fetchTickets(token: String) {
         print("📡 [TicketService] Tentative de récupération de l'historique...")
         
@@ -69,6 +69,8 @@ class TicketService: ObservableObject {
                 
                 do {
                     let decoder = JSONDecoder()
+                    // Décodeur pour gérer les dates ISO du backend
+                    decoder.dateDecodingStrategy = .iso8601
                     let decodedTickets = try decoder.decode([Ticket].self, from: data)
                     print("✅ [TicketService] \(decodedTickets.count) tickets récupérés avec succès")
                     self?.tickets = decodedTickets
@@ -80,7 +82,7 @@ class TicketService: ObservableObject {
         }.resume()
     }
     
-    // MARK: - Upload & Scan
+    // MARK: - 2. Upload & Analysis (Ollama)
     func uploadTicket(image: UIImage, token: String) {
         print("🚀 [TicketService] Démarrage de l'upload vers Ollama...")
         
@@ -116,7 +118,6 @@ class TicketService: ObservableObject {
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
         
         request.httpBody = body
-        print("📤 [TicketService] Envoi de la requête Multipart au serveur...")
         
         DispatchQueue.main.async {
             self.isLoading = true
@@ -135,16 +136,13 @@ class TicketService: ObservableObject {
                 }
                 
                 guard let httpResponse = response as? HTTPURLResponse else {
-                    print("❌ [TicketService] Le serveur n'a pas répondu à l'upload")
                     self?.errorMessage = "No response from server"
                     return
                 }
                 
                 print("📡 [TicketService] Code Status Upload: \(httpResponse.statusCode)")
                 
-                // ✅ GESTION DU TOKEN EXPIRE ICI AUSSI
                 if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
-                    print("⚠️ [TicketService] Token rejeté lors de l'upload.")
                     self?.onUnauthorized?()
                     return
                 }
@@ -152,11 +150,56 @@ class TicketService: ObservableObject {
                 if let data = data, let responseString = String(data: data, encoding: .utf8) {
                     print("✨ [TicketService] Réponse reçue d'Ollama: \(responseString)")
                     self?.lastScanResult = responseString
-                    
-                    // On rafraîchit l'historique
+                }
+            }
+        }.resume()
+    }
+
+    // MARK: - 3. Save Final Ticket (BDD)
+    /// ✅ NOUVEAU: Appelle /api/v1/tickets/scan pour enregistrer réellement en base
+    func saveValidatedTicket(merchant: String, amount: Double, rawOcr: String, token: String) {
+        print("💾 [TicketService] Enregistrement définitif en base de données...")
+        
+        guard let url = URL(string: "\(baseURL)/scan") else { return }
+        
+        // Corps de la requête correspondant à ton TicketRequest.java
+        let body: [String: Any] = [
+            "merchantName": merchant,
+            "totalAmount": amount,
+            "rawOcrText": rawOcr,
+            "category": "Alimentation",
+            "purchaseDate": ISO8601DateFormatter().string(from: Date())
+        ]
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            print("❌ [TicketService] Erreur JSON Serialization")
+            return
+        }
+        
+        DispatchQueue.main.async { self.isLoading = true }
+        
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                self?.isLoading = false
+                
+                guard let httpResponse = response as? HTTPURLResponse else { return }
+                
+                if httpResponse.statusCode == 200 {
+                    print("✅ [TicketService] Ticket enregistré avec succès !")
+                    // On vide le résultat de l'IA pour fermer la vue
+                    self?.lastScanResult = nil
+                    // On rafraîchit l'historique du Dashboard
                     self?.fetchTickets(token: token)
                 } else {
-                    print("⚠️ [TicketService] Upload réussi mais aucune donnée reçue en retour")
+                    print("❌ [TicketService] Échec de la sauvegarde (Code: \(httpResponse.statusCode))")
+                    self?.errorMessage = "Erreur lors de la sauvegarde."
                 }
             }
         }.resume()

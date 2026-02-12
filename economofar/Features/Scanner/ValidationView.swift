@@ -2,92 +2,171 @@ import SwiftUI
 
 struct ValidationView: View {
     @Environment(\.dismiss) var dismiss
-    @EnvironmentObject var sessionManager: SessionManager // Pour sauvegarder plus tard
+    @EnvironmentObject var sessionManager: SessionManager
     
-    // On reçoit le texte brut du Scanner
-    let scannedText: String
+    // On reçoit le service depuis le Dashboard pour lancer la sauvegarde
+    @ObservedObject var ticketService: TicketService
     
-    // Notre ViewModel local
-    @StateObject private var viewModel: ValidationViewModel
+    // Données reçues du Scanner / Ollama
+    var image: UIImage?
+    var resultText: String
     
-    // Nécessaire pour initialiser le ViewModel avec des données externes
-    init(scannedText: String) {
-        self.scannedText = scannedText
-        _viewModel = StateObject(wrappedValue: ValidationViewModel(rawText: scannedText))
-    }
+    // Champs éditables par l'utilisateur
+    @State private var merchantName: String = ""
+    @State private var totalAmount: Double = 0.0
+    @State private var purchaseDate: Date = Date()
     
     var body: some View {
         NavigationStack {
             Form {
-                Section(header: Text("Détails du ticket")) {
-                    // Champ Marchand
+                // SECTION 1 : VISUEL
+                Section(header: Text("Ticket Scanné")) {
+                    if let img = image {
+                        HStack {
+                            Spacer()
+                            Image(uiImage: img)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(height: 150)
+                                .cornerRadius(8)
+                            Spacer()
+                        }
+                        .listRowBackground(Color.clear)
+                    }
+                }
+                
+                // SECTION 2 : FORMULAIRE
+                Section(header: Text("Détails à valider")) {
                     HStack {
-                        Image(systemName: "building.2")
-                            .foregroundColor(.gray)
-                        TextField("Nom du magasin", text: $viewModel.merchantName)
+                        Image(systemName: "building.2").foregroundColor(.blue)
+                        TextField("Enseigne (ex: Carrefour)", text: $merchantName)
                     }
                     
-                    // Champ Montant
                     HStack {
-                        Image(systemName: "eurosign.circle")
-                            .foregroundColor(.gray)
-                        TextField("Montant total", text: $viewModel.totalAmount)
+                        Image(systemName: "eurosign.circle").foregroundColor(.blue)
+                        TextField("0.00", value: $totalAmount, format: .number)
                             .keyboardType(.decimalPad)
                     }
                     
-                    // Champ Date
-                    DatePicker(selection: $viewModel.date, displayedComponents: .date) {
-                        HStack {
-                            Image(systemName: "calendar")
-                                .foregroundColor(.gray)
-                            Text("Date d'achat")
+                    HStack {
+                        Image(systemName: "calendar").foregroundColor(.blue)
+                        DatePicker("Date", selection: $purchaseDate, displayedComponents: .date)
+                    }
+                }
+                
+                // SECTION 3 : DEBUG (Pour voir ce qu'Ollama a renvoyé)
+                Section(header: Text("Données brutes IA")) {
+                    Text(resultText)
+                        .font(.caption2)
+                        .foregroundColor(.gray)
+                        .lineLimit(3)
+                        .onTapGesture {
+                            // Copier dans le presse-papier si besoin de debug
+                            UIPasteboard.general.string = resultText
+                        }
+                }
+                
+                // SECTION 4 : ACTION
+                Section {
+                    Button(action: saveReceipt) {
+                        if ticketService.isLoading {
+                            HStack {
+                                Spacer()
+                                ProgressView()
+                                Spacer()
+                            }
+                        } else {
+                            Text("Confirmer et Enregistrer")
+                                .bold()
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
                         }
                     }
-                }
-                
-                Section(header: Text("Texte détecté (Debug)")) {
-                    Text(viewModel.rawText)
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                        .lineLimit(5)
-                }
-                
-                Section {
-                    Button(action: {
-                        saveReceipt()
-                    }) {
-                        Text("Confirmer et Enregistrer")
-                            .fontWeight(.bold)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .foregroundColor(.blue)
-                    }
+                    .listRowBackground(Color.green)
                 }
             }
-            .navigationTitle("Vérification")
+            .navigationTitle("Validation")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Annuler") {
-                        dismiss()
-                    }
+                    Button("Annuler") { dismiss() }
                 }
+            }
+            .onAppear {
+                parseRobustJSON()
             }
         }
     }
     
+    // MARK: - Logique Métier
+    
     func saveReceipt() {
-        let newReceipt = viewModel.createReceipt()
-        print("Ticket sauvegardé : \(newReceipt)")
-        // ICI : Plus tard, on ajoutera ce ticket au SessionManager ou on l'enverra au serveur
+        guard let token = sessionManager.token else { return }
         
-        // On ferme tout pour revenir au Dashboard
-        // Astuce : En SwiftUI pur, revenir à la racine demande un peu de gestion d'état,
-        // pour l'instant on ferme juste cette vue.
+        // Appel au backend
+        ticketService.saveValidatedTicket(
+            merchant: merchantName,
+            amount: totalAmount,
+            rawOcr: resultText,
+            token: token
+        )
+        
+        // On ferme la vue
         dismiss()
     }
-}
-
-#Preview {
-    ValidationView(scannedText: "METRO FRANCE\nTOTAL : 145,50 EUR\nMERCI")
-        .environmentObject(SessionManager())
+    
+    // Fonction robuste qui utilise des Regex pour ignorer les erreurs de JSON
+    func parseRobustJSON() {
+        print("🔍 [ValidationView] Parsing intelligent (Regex)...")
+        
+        // 1. Extraction du Marchand
+        let merchantPattern = "\"merchant\"\\s*:\\s*\"([^\"]+)\""
+        if let merchantRegex = try? NSRegularExpression(pattern: merchantPattern, options: []) {
+            let nsString = resultText as NSString
+            if let match = merchantRegex.firstMatch(in: resultText, options: [], range: NSRange(location: 0, length: nsString.length)) {
+                self.merchantName = nsString.substring(with: match.range(at: 1))
+            }
+        }
+        
+        // 2. Extraction du Total (Prend le PREMIER trouvé pour éviter les doublons buggés)
+        let totalPattern = "\"total\"\\s*:\\s*([0-9.]+)"
+        if let totalRegex = try? NSRegularExpression(pattern: totalPattern, options: []) {
+            let nsString = resultText as NSString
+            if let match = totalRegex.firstMatch(in: resultText, options: [], range: NSRange(location: 0, length: nsString.length)) {
+                let totalString = nsString.substring(with: match.range(at: 1))
+                if let doubleValue = Double(totalString) {
+                    self.totalAmount = doubleValue
+                }
+            }
+        }
+        
+        // 3. Extraction de la Date (Bonus)
+        let datePattern = "\"date\"\\s*:\\s*\"([^\"]+)\""
+        if let dateRegex = try? NSRegularExpression(pattern: datePattern, options: []) {
+            let nsString = resultText as NSString
+            if let match = dateRegex.firstMatch(in: resultText, options: [], range: NSRange(location: 0, length: nsString.length)) {
+                let dateString = nsString.substring(with: match.range(at: 1))
+                
+                // Tentative de conversion de la date string en objet Date
+                let isoFormatter = ISO8601DateFormatter()
+                isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                if let date = isoFormatter.date(from: dateString) {
+                    self.purchaseDate = date
+                } else {
+                    // Fallback sans millisecondes
+                    isoFormatter.formatOptions = [.withInternetDateTime]
+                    if let date = isoFormatter.date(from: dateString) {
+                        self.purchaseDate = date
+                    }
+                }
+            }
+        }
+        
+        // 4. Fallback standard (Si le JSON est parfait, ce qui est rare avec les IA génératives)
+        if self.merchantName.isEmpty, let data = resultText.data(using: .utf8) {
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                self.merchantName = json["merchant"] as? String ?? ""
+            }
+        }
+    }
 }

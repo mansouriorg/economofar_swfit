@@ -1,148 +1,68 @@
 import SwiftUI
-import VisionKit
+import UIKit
 
-struct ScannerView: View {
-    @EnvironmentObject var sessionManager: SessionManager
-    // ✅ Injection du service pour pouvoir envoyer l'image à Ollama
-    @ObservedObject var ticketService: TicketService
-    @StateObject private var viewModel = ScannerViewModel()
+// ✅ On utilise UIViewControllerRepresentable pour accéder à la caméra native iOS
+struct ScannerView: UIViewControllerRepresentable {
     
-    @Binding var isPresented: Bool // Utiliser un binding pour fermer proprement
+    // Pour fermer la vue
+    @Binding var isPresented: Bool
     
-    var body: some View {
-        ZStack {
-            // 1. La Caméra
-            if DataScannerViewController.isSupported {
-                DataScannerRepresentable(
-                    recognizedText: $viewModel.recognizedText,
-                    isScanning: $viewModel.isScanning
-                )
-                .ignoresSafeArea()
-            } else {
-                VStack {
-                    Image(systemName: "camera.fill").font(.largeTitle)
-                    Text("Caméra non disponible sur simulateur")
-                }.foregroundColor(.red)
-            }
-            
-            // 2. Interface UI
-            VStack {
-                // Header
-                HStack {
-                    Button(action: { isPresented = false }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.title)
-                            .foregroundColor(.white)
-                    }
-                    Spacer()
-                    Text("Scanner un ticket")
-                        .font(.headline).foregroundColor(.white)
-                        .padding(10).background(Color.black.opacity(0.5)).cornerRadius(20)
-                    Spacer()
-                    Image(systemName: "xmark.circle.fill").hidden()
-                }
-                .padding()
-                
-                Spacer()
-                
-                // Zone de détection et Validation
-                if !viewModel.recognizedText.isEmpty {
-                    VStack(spacing: 15) {
-                        VStack(alignment: .leading) {
-                            Text("Dernier texte vu :").font(.caption).foregroundColor(.gray)
-                            Text(viewModel.recognizedText)
-                                .font(.subheadline).lineLimit(2)
-                        }
-                        .padding().frame(maxWidth: .infinity).background(Color.white.opacity(0.9)).cornerRadius(10)
-
-                        Button(action: {
-                            // ✅ LOGIQUE : On ne passe pas par ValidationView ici,
-                            // on envoie directement l'image au serveur pour analyse IA complète.
-                            captureAndSend()
-                        }) {
-                            HStack {
-                                Image(systemName: "sparkles")
-                                Text("Analyser avec Ollama")
-                            }
-                            .fontWeight(.bold)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.blue)
-                            .foregroundColor(.white)
-                            .cornerRadius(12)
-                        }
-                    }
-                    .padding().background(BlurView(style: .systemThinMaterial)).cornerRadius(20).padding()
-                }
-            }
-        }
-    }
+    // Callback pour renvoyer l'image capturée au Dashboard
+    var onImageCaptured: (UIImage) -> Void
     
-    // ✅ Fonction pour simuler la capture et envoyer au backend
-    func captureAndSend() {
-        guard let token = sessionManager.token else { return }
-        viewModel.isScanning = false
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.delegate = context.coordinator
         
-        // Comme DataScanner ne permet pas facilement de prendre une photo "photo"
-        // pendant qu'il scanne du texte, on utilise une astuce :
-        // On ferme le scanner et on informe le dashboard qu'on veut traiter l'image.
-        
-        // Pour ton test, on va envoyer une image par défaut ou déclencher l'analyse.
-        // Si tu as besoin d'une vraie capture écran de la caméra, c'est plus complexe.
-        // Ici, on ferme et on laisse le Dashboard gérer l'état isLoading.
-        isPresented = false
-        
-        // Note: Idéalement, ici tu captures le rendu de la vue ou tu utilises
-        // une image temporaire pour déclencher OllamaService sur ton Spring Boot.
-    }
-}
-
-// ✅ Petit utilitaire pour le flou UI
-struct BlurView: UIViewRepresentable {
-    var style: UIBlurEffect.Style
-    func makeUIView(context: Context) -> UIVisualEffectView {
-        return UIVisualEffectView(effect: UIBlurEffect(style: style))
-    }
-    func updateUIView(_ uiView: UIVisualEffectView, context: Context) {}
-}
-
-// --- PONT UIKIT (Inchangé mais nécessaire pour la stabilité) ---
-struct DataScannerRepresentable: UIViewControllerRepresentable {
-    @Binding var recognizedText: String
-    @Binding var isScanning: Bool
-    
-    func makeUIViewController(context: Context) -> DataScannerViewController {
-        let scanner = DataScannerViewController(
-            recognizedDataTypes: [.text()],
-            qualityLevel: .balanced,
-            recognizesMultipleItems: false,
-            isHighFrameRateTrackingEnabled: true,
-            isHighlightingEnabled: true
-        )
-        scanner.delegate = context.coordinator
-        return scanner
-    }
-    
-    func updateUIViewController(_ uiViewController: DataScannerViewController, context: Context) {
-        if isScanning {
-            try? uiViewController.startScanning()
+        // Si c'est un iPhone réel -> Caméra
+        // Si c'est le simulateur -> Galerie Photo (pour tester)
+        if UIImagePickerController.isSourceTypeAvailable(.camera) {
+            picker.sourceType = .camera
+            picker.cameraCaptureMode = .photo
         } else {
-            uiViewController.stopScanning()
+            print("⚠️ Caméra indisponible (Simulateur ?), ouverture de la galerie.")
+            picker.sourceType = .photoLibrary
         }
+        
+        // Désactiver l'édition pour avoir l'image brute
+        picker.allowsEditing = false
+        return picker
+    }
+    
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {
+        // Rien à mettre à jour dynamiquement ici
     }
     
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
     }
     
-    class Coordinator: NSObject, DataScannerViewControllerDelegate {
-        var parent: DataScannerRepresentable
-        init(parent: DataScannerRepresentable) { self.parent = parent }
+    // Le Coordinateur gère les événements de la caméra (photo prise, annulation)
+    class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        let parent: ScannerView
         
-        func dataScanner(_ dataScanner: DataScannerViewController, didAdd addedItems: [RecognizedItem], allItems: [RecognizedItem]) {
-            if let item = addedItems.first, case let .text(text) = item {
-                parent.recognizedText = text.transcript
+        init(parent: ScannerView) {
+            self.parent = parent
+        }
+        
+        // Appelé quand l'utilisateur a pris une photo
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey : Any]) {
+            
+            if let image = info[.originalImage] as? UIImage {
+                print("📸 Photo capturée avec succès !")
+                // On renvoie l'image au parent (DashboardView)
+                parent.onImageCaptured(image)
+            } else {
+                print("❌ Erreur: Aucune image trouvée")
             }
+            
+            // On ferme la caméra
+            parent.isPresented = false
+        }
+        
+        // Appelé si l'utilisateur annule
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.isPresented = false
         }
     }
 }
