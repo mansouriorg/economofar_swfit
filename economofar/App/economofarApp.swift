@@ -2,27 +2,32 @@ import SwiftUI
 
 @main
 struct economofarApp: App {
-    // On injecte le SessionManager dans toute l'application
+    // On crée l'instance unique du SessionManager ici
     @StateObject private var sessionManager = SessionManager()
     
     var body: some Scene {
         WindowGroup {
-            // Logique de démarrage
-            if sessionManager.isLoading {
-                // 1️⃣ Au lancement : On affiche le Splash Screen
-                SplashView()
-                    .transition(.opacity) // Petite transition douce quand il disparaît
-                
-            } else if sessionManager.isLoggedIn {
-                // 2️⃣ Si connecté : On va sur l'App principale (TabBar)
-                MainTabView()
-                    .environmentObject(sessionManager)
-                
-            } else {
-                // 3️⃣ Sinon : On va sur le Login
-                LoginView()
-                    .environmentObject(sessionManager)
+            ZStack {
+                // Logique de routage
+                if sessionManager.isLoading {
+                    // 1️⃣ Splash Screen pendant la vérification du token
+                    SplashView()
+                        .transition(.opacity)
+                    
+                } else if sessionManager.isLoggedIn {
+                    // 2️⃣ Redirection automatique si le token est valide
+                    MainTabView()
+                    
+                } else {
+                    // 3️⃣ Login si aucun token n'est trouvé ou si déconnecté
+                    LoginView()
+                }
             }
+            // ✅ Injection UNIQUE pour toute la hiérarchie de l'app
+            // Plus besoin de le remettre sur chaque vue individuellement
+            .environmentObject(sessionManager)
+            .animation(.easeInOut, value: sessionManager.isLoggedIn)
+            .animation(.easeInOut, value: sessionManager.isLoading)
         }
     }
 }

@@ -1,43 +1,72 @@
+import Foundation
 import SwiftUI
 import Combine
 
 class SessionManager: ObservableObject {
-    // Si @Published change, toute l'interface se met à jour automatiquement
+    // MARK: - Published Properties
     @Published var isLoggedIn: Bool = false
     @Published var currentUser: User?
-    
-    // ✅ NEW: Stocker le token pour les appels API
     @Published var token: String?
-    
-    // État de chargement initial (pour le Splash Screen)
     @Published var isLoading: Bool = true
     
+    // ✅ Utilisation de la même clé que dans AuthService pour la cohérence
+    private let tokenKey = "jwt_token"
+    
     init() {
+        print("🚀 [SessionManager] Initialisation...")
         checkLoginStatus()
     }
     
+    // MARK: - Session Logic
+    
     func checkLoginStatus() {
-        // ICI: Plus tard, on vérifiera le Token dans le Keychain
-        
-        // Simulation d'un délai de chargement de 2 secondes
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            // Pour l'instant, on force "non connecté" après le chargement
+        // 1. On vérifie si un token existe physiquement sur le disque
+        if let savedToken = UserDefaults.standard.string(forKey: tokenKey) {
+            print("🔑 [SessionManager] Token trouvé dans UserDefaults: \(savedToken.prefix(10))...")
+            
+            // On met à jour l'état en mémoire
+            self.token = savedToken
+            self.isLoggedIn = true
+            
+            // NOTE: Idéalement, ici tu devrais faire un appel API rapide
+            // pour récupérer les infos du User (Profile) avec ce token.
+        } else {
+            print("ℹ️ [SessionManager] Aucun token trouvé au démarrage.")
             self.isLoggedIn = false
-            self.isLoading = false
+        }
+        
+        // 2. On laisse le Splash Screen visible un court instant
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            withAnimation {
+                self.isLoading = false
+            }
+            print("🏁 [SessionManager] Chargement initial terminé. isLoggedIn: \(self.isLoggedIn)")
         }
     }
     
-    // ✅ UPDATE: On accepte le token ici
-    func login(user: User, token: String) {
+    /// ✅ Utilisé par le LoginView pour synchroniser la session après un succès API
+    func setSession(token: String, user: User? = nil) {
+        print("🔓 [SessionManager] Mise à jour de la session active")
+        
+        self.token = token
         self.currentUser = user
-        self.token = token // On sauvegarde le token
         self.isLoggedIn = true
+        
+        // Sauvegarde physique pour que l'app s'en souvienne au prochain démarrage
+        UserDefaults.standard.set(token, forKey: tokenKey)
     }
     
     func logout() {
-        // Appelé quand on clique sur "Se déconnecter"
+        print("🔒 [SessionManager] Fermeture de la session et nettoyage...")
+        
+        self.token = nil
         self.currentUser = nil
-        self.token = nil // On efface le token
         self.isLoggedIn = false
+        
+        // Suppression physique du token
+        UserDefaults.standard.removeObject(forKey: tokenKey)
+        
+        // Nettoyage optionnel des cookies de session
+        URLCache.shared.removeAllCachedResponses()
     }
 }

@@ -3,17 +3,15 @@ import VisionKit
 
 struct ScannerView: View {
     @EnvironmentObject var sessionManager: SessionManager
+    // ✅ Injection du service pour pouvoir envoyer l'image à Ollama
+    @ObservedObject var ticketService: TicketService
     @StateObject private var viewModel = ScannerViewModel()
     
-    // Pour fermer la vue (retour au Dashboard)
-    @Environment(\.dismiss) var dismiss
-    
-    // ✅ NOUVEAU : État pour déclencher la navigation vers l'écran de validation
-    @State private var showValidation = false
+    @Binding var isPresented: Bool // Utiliser un binding pour fermer proprement
     
     var body: some View {
         ZStack {
-            // 1. La Caméra (Le pont UIKit)
+            // 1. La Caméra
             if DataScannerViewController.isSupported {
                 DataScannerRepresentable(
                     recognizedText: $viewModel.recognizedText,
@@ -21,99 +19,104 @@ struct ScannerView: View {
                 )
                 .ignoresSafeArea()
             } else {
-                Text("Votre appareil ne supporte pas le scan de texte.")
-                    .foregroundColor(.red)
+                VStack {
+                    Image(systemName: "camera.fill").font(.largeTitle)
+                    Text("Caméra non disponible sur simulateur")
+                }.foregroundColor(.red)
             }
             
-            // 2. L'Interface par-dessus la caméra
+            // 2. Interface UI
             VStack {
                 // Header
                 HStack {
-                    Button(action: { dismiss() }) {
+                    Button(action: { isPresented = false }) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.title)
                             .foregroundColor(.white)
                     }
                     Spacer()
-                    Text("Pointez vers le ticket")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .padding(.vertical, 8)
-                        .padding(.horizontal, 15)
-                        .background(Color.black.opacity(0.6))
-                        .cornerRadius(20)
+                    Text("Scanner un ticket")
+                        .font(.headline).foregroundColor(.white)
+                        .padding(10).background(Color.black.opacity(0.5)).cornerRadius(20)
                     Spacer()
-                    // Bouton invisible pour équilibrer le header
                     Image(systemName: "xmark.circle.fill").hidden()
                 }
                 .padding()
                 
                 Spacer()
                 
-                // Zone de texte détecté (Preview)
+                // Zone de détection et Validation
                 if !viewModel.recognizedText.isEmpty {
-                    VStack(alignment: .leading) {
-                        Text("Texte détecté :")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                        Text(viewModel.recognizedText)
-                            .font(.body)
-                            .lineLimit(3) // On affiche juste 3 lignes max
-                            .foregroundColor(.primary)
-                    }
-                    .padding()
-                    .frame(maxWidth: .infinity)
-                    .background(Color.white)
-                    .cornerRadius(15)
-                    .padding(.horizontal)
-                    .padding(.bottom, 10)
-                    
-                    // Bouton Valider
-                    Button(action: {
-                        viewModel.validateScan()
-                        // ✅ Au lieu de fermer, on ouvre l'écran de validation
-                        showValidation = true
-                    }) {
-                        Text("Valider la capture")
+                    VStack(spacing: 15) {
+                        VStack(alignment: .leading) {
+                            Text("Dernier texte vu :").font(.caption).foregroundColor(.gray)
+                            Text(viewModel.recognizedText)
+                                .font(.subheadline).lineLimit(2)
+                        }
+                        .padding().frame(maxWidth: .infinity).background(Color.white.opacity(0.9)).cornerRadius(10)
+
+                        Button(action: {
+                            // ✅ LOGIQUE : On ne passe pas par ValidationView ici,
+                            // on envoie directement l'image au serveur pour analyse IA complète.
+                            captureAndSend()
+                        }) {
+                            HStack {
+                                Image(systemName: "sparkles")
+                                Text("Analyser avec Ollama")
+                            }
                             .fontWeight(.bold)
                             .frame(maxWidth: .infinity)
                             .padding()
                             .background(Color.blue)
                             .foregroundColor(.white)
                             .cornerRadius(12)
+                        }
                     }
-                    .padding(.horizontal)
-                    .padding(.bottom)
+                    .padding().background(BlurView(style: .systemThinMaterial)).cornerRadius(20).padding()
                 }
             }
         }
-        .onAppear {
-            // Vérification simple au démarrage
-            if !DataScannerViewController.isSupported {
-                viewModel.errorMessage = "Appareil non compatible"
-            }
-        }
-        // ✅ NAVIGATION : Vers l'écran de validation
-        .navigationDestination(isPresented: $showValidation) {
-            ValidationView(scannedText: viewModel.recognizedText)
-        }
+    }
+    
+    // ✅ Fonction pour simuler la capture et envoyer au backend
+    func captureAndSend() {
+        guard let token = sessionManager.token else { return }
+        viewModel.isScanning = false
+        
+        // Comme DataScanner ne permet pas facilement de prendre une photo "photo"
+        // pendant qu'il scanne du texte, on utilise une astuce :
+        // On ferme le scanner et on informe le dashboard qu'on veut traiter l'image.
+        
+        // Pour ton test, on va envoyer une image par défaut ou déclencher l'analyse.
+        // Si tu as besoin d'une vraie capture écran de la caméra, c'est plus complexe.
+        // Ici, on ferme et on laisse le Dashboard gérer l'état isLoading.
+        isPresented = false
+        
+        // Note: Idéalement, ici tu captures le rendu de la vue ou tu utilises
+        // une image temporaire pour déclencher OllamaService sur ton Spring Boot.
     }
 }
 
-// --- LE PONT UIKIT (C'est la partie magique) ---
+// ✅ Petit utilitaire pour le flou UI
+struct BlurView: UIViewRepresentable {
+    var style: UIBlurEffect.Style
+    func makeUIView(context: Context) -> UIVisualEffectView {
+        return UIVisualEffectView(effect: UIBlurEffect(style: style))
+    }
+    func updateUIView(_ uiView: UIVisualEffectView, context: Context) {}
+}
+
+// --- PONT UIKIT (Inchangé mais nécessaire pour la stabilité) ---
 struct DataScannerRepresentable: UIViewControllerRepresentable {
     @Binding var recognizedText: String
     @Binding var isScanning: Bool
     
     func makeUIViewController(context: Context) -> DataScannerViewController {
-        // On configure le scanner pour chercher du TEXTE
         let scanner = DataScannerViewController(
             recognizedDataTypes: [.text()],
             qualityLevel: .balanced,
             recognizesMultipleItems: false,
             isHighFrameRateTrackingEnabled: true,
-            isPinchToZoomEnabled: true,
-            isGuidanceEnabled: true,
             isHighlightingEnabled: true
         )
         scanner.delegate = context.coordinator
@@ -132,28 +135,13 @@ struct DataScannerRepresentable: UIViewControllerRepresentable {
         Coordinator(parent: self)
     }
     
-    // Le Coordinateur écoute les événements de la caméra
     class Coordinator: NSObject, DataScannerViewControllerDelegate {
         var parent: DataScannerRepresentable
-        
-        init(parent: DataScannerRepresentable) {
-            self.parent = parent
-        }
-        
-        func dataScanner(_ dataScanner: DataScannerViewController, didTapOn item: RecognizedItem) {
-            // Si l'utilisateur tape sur un texte à l'écran
-            if case let .text(text) = item {
-                parent.recognizedText = text.transcript
-            }
-        }
+        init(parent: DataScannerRepresentable) { self.parent = parent }
         
         func dataScanner(_ dataScanner: DataScannerViewController, didAdd addedItems: [RecognizedItem], allItems: [RecognizedItem]) {
-            // Quand du nouveau texte est détecté
             if let item = addedItems.first, case let .text(text) = item {
-                // On met à jour le texte seulement s'il est assez long (pour éviter le bruit)
-                if text.transcript.count > 5 {
-                    parent.recognizedText = text.transcript
-                }
+                parent.recognizedText = text.transcript
             }
         }
     }

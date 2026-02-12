@@ -4,26 +4,29 @@ import PhotosUI
 struct DashboardView: View {
     @EnvironmentObject var sessionManager: SessionManager
     
-    // ✅ 1. Inject the TicketService
+    // ✅ Injection du TicketService
     @StateObject private var ticketService = TicketService()
     
-    // --- STATE FOR IMAGE UPLOAD & AI ---
+    // --- ÉTATS POUR L'UPLOAD ET L'IA ---
     @State private var selectedPhotoItem: PhotosPickerItem? = nil
     @State private var selectedImage: UIImage? = nil
-    @State private var isAnalyzing = false
     @State private var analysisResult: String = ""
     @State private var showResultSheet = false
+    
+    // ✅ États pour la navigation et les sélecteurs
+    @State private var showScanner = false
+    @State private var isPhotosPickerPresented = false
     
     var body: some View {
         NavigationStack {
             ZStack {
-                // Light gray background
+                // Fond de l'application
                 Color(UIColor.systemGroupedBackground)
                     .ignoresSafeArea()
                 
                 VStack(spacing: 20) {
                     
-                    // --- HEADER / SUMMARY ---
+                    // --- HEADER / RÉSUMÉ ---
                     VStack(alignment: .leading, spacing: 15) {
                         HStack {
                             VStack(alignment: .leading) {
@@ -35,20 +38,22 @@ struct DashboardView: View {
                                     .fontWeight(.bold)
                             }
                             Spacer()
-                            // Avatar
                             Circle()
                                 .fill(Color.blue.opacity(0.1))
                                 .frame(width: 40, height: 40)
-                                .overlay(Text(String(sessionManager.currentUser?.firstName.prefix(1) ?? "U")).fontWeight(.bold).foregroundColor(.blue))
+                                .overlay(
+                                    Text(String(sessionManager.currentUser?.firstName.prefix(1) ?? "U"))
+                                        .fontWeight(.bold)
+                                        .foregroundColor(.blue)
+                                )
                         }
                         
-                        // "Expenses" Card
+                        // Carte "Total Scanné"
                         HStack {
                             VStack(alignment: .leading) {
                                 Text("Total Scanné")
                                     .font(.caption)
                                     .foregroundColor(.white.opacity(0.8))
-                                // Dynamic total calculation
                                 Text(calculateTotal())
                                     .font(.system(size: 30, weight: .bold, design: .rounded))
                                     .foregroundColor(.white)
@@ -66,7 +71,7 @@ struct DashboardView: View {
                     .padding(.horizontal)
                     .padding(.top)
                     
-                    // --- TICKET LIST (Connected to Backend) ---
+                    // --- LISTE DES TICKETS (HISTORIQUE) ---
                     VStack(alignment: .leading) {
                         HStack {
                             Text("Historique récent")
@@ -80,7 +85,6 @@ struct DashboardView: View {
                         
                         ScrollView {
                             VStack(spacing: 15) {
-                                // ✅ 2. Display tickets from Service
                                 ForEach(ticketService.tickets) { ticket in
                                     TicketRow(ticket: ticket)
                                 }
@@ -90,13 +94,12 @@ struct DashboardView: View {
                                         Image(systemName: "doc.text.magnifyingglass")
                                             .font(.largeTitle)
                                             .foregroundColor(.gray)
-                                        Text("Aucun ticket scanné pour le moment")
+                                        Text("Aucun ticket scanné")
                                             .foregroundColor(.gray)
                                     }
                                     .padding(.top, 40)
                                 }
                                 
-                                // Display errors if any
                                 if let error = ticketService.errorMessage {
                                     Text(error)
                                         .font(.caption)
@@ -108,6 +111,7 @@ struct DashboardView: View {
                             .padding(.bottom, 80)
                         }
                         .refreshable {
+                            print("🔄 [Dashboard] Refresh manuel de l'historique")
                             if let token = sessionManager.token {
                                 ticketService.fetchTickets(token: token)
                             }
@@ -115,14 +119,31 @@ struct DashboardView: View {
                     }
                 }
                 
-                // --- FLOATING BUTTON (SCANNER) ---
+                // --- BOUTON FLOTTANT (SCANNER) ---
                 VStack {
                     Spacer()
-                    PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                    
+                    Menu {
+                        Button(action: {
+                            print("📸 [Dashboard] Clic: Ouvrir Scanner")
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                showScanner = true
+                            }
+                        }) {
+                            Label("Appareil Photo", systemImage: "camera")
+                        }
+                        
+                        Button(action: {
+                            print("🖼️ [Dashboard] Clic: Ouvrir Galerie")
+                            isPhotosPickerPresented = true
+                        }) {
+                            Label("Galerie Photos", systemImage: "photo.on.rectangle")
+                        }
+                    } label: {
                         HStack {
-                            if isAnalyzing {
+                            if ticketService.isLoading {
                                 ProgressView().tint(.white).padding(.trailing, 5)
-                                Text("Analyse...")
+                                Text("Analyse Ollama...")
                                     .fontWeight(.bold)
                             } else {
                                 Image(systemName: "camera.viewfinder")
@@ -138,66 +159,92 @@ struct DashboardView: View {
                         .cornerRadius(30)
                         .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 5)
                     }
-                    .disabled(isAnalyzing)
+                    .disabled(ticketService.isLoading)
                     .padding(.bottom, 20)
-                    .onChange(of: selectedPhotoItem) { newItem in
-                        Task {
-                            if let data = try? await newItem?.loadTransferable(type: Data.self),
-                               let image = UIImage(data: data) {
-                                self.selectedImage = image
-                                analyzeReceipt(image: image)
-                            }
-                        }
-                    }
                 }
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Déconnexion") {
+                        print("🚪 [Dashboard] Clic: Déconnexion")
                         sessionManager.logout()
                     }
                     .font(.caption)
                     .foregroundColor(.red)
                 }
             }
+            // ✅ PhotosPicker détaché pour éviter l'erreur de hiérarchie
+            .photosPicker(isPresented: $isPhotosPickerPresented, selection: $selectedPhotoItem, matching: .images)
+            
+            // ✅ Logique de sélection de photo
+            .onChange(of: selectedPhotoItem) { newItem in
+                print("📂 [Dashboard] Photo sélectionnée dans le picker")
+                Task {
+                    if let data = try? await newItem?.loadTransferable(type: Data.self) {
+                        if let image = UIImage(data: data) {
+                            await MainActor.run {
+                                print("🖼️ [Dashboard] Image chargée, lancement de l'analyse...")
+                                self.selectedImage = image
+                                analyzeReceipt(image: image)
+                            }
+                        }
+                    } else {
+                        print("❌ [Dashboard] Échec du chargement des données de l'image")
+                    }
+                }
+            }
+            
+            // ✅ Réception du résultat Ollama
+            .onChange(of: ticketService.lastScanResult) { newResult in
+                if let result = newResult {
+                    print("✨ [Dashboard] Résultat Ollama reçu, affichage de la Sheet")
+                    self.analysisResult = result
+                    self.showResultSheet = true
+                }
+            }
+            
             .sheet(isPresented: $showResultSheet) {
                 ResultView(image: selectedImage, resultText: analysisResult, isPresented: $showResultSheet)
-                    .onDisappear {
-                        if let token = sessionManager.token {
-                            ticketService.fetchTickets(token: token)
-                        }
-                    }
+            }
+            
+            .fullScreenCover(isPresented: $showScanner) {
+                ScannerView(ticketService: ticketService, isPresented: $showScanner)
             }
         }
-        // ✅ 3. Auto-load on view appear
         .onAppear {
-            if ticketService.tickets.isEmpty {
-                if let token = sessionManager.token {
-                    ticketService.fetchTickets(token: token)
-                }
+            print("🏠 [Dashboard] Apparition de la vue")
+            
+            // ✅ CRUCIAL : On lie le service au SessionManager pour gérer les erreurs 403
+            ticketService.onUnauthorized = {
+                print("🚨 [Dashboard] Signal de déconnexion reçu du service !")
+                sessionManager.logout()
+            }
+            
+            if let token = sessionManager.token {
+                print("🔑 [Dashboard] Token trouvé: \(token.prefix(10))...")
+                ticketService.fetchTickets(token: token)
+            } else {
+                print("⚠️ [Dashboard] Aucun token trouvé dans sessionManager")
             }
         }
     }
     
     func calculateTotal() -> String {
-        let total = ticketService.tickets.reduce(0) { $0 + ($1.totalAmount ?? 0) }
+        let total = ticketService.tickets.compactMap { $0.totalAmount }.reduce(0, +)
         return String(format: "%.2f €", total)
     }
     
-    // --- SCANNER FUNCTION (Placeholder for now) ---
     func analyzeReceipt(image: UIImage) {
-        isAnalyzing = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            isAnalyzing = false
-            self.analysisResult = "Scan terminé ! (Logique d'envoi à faire dans le prochain step)"
-            self.showResultSheet = true
+        guard let token = sessionManager.token else {
+            print("❌ [Dashboard] Analyse impossible: Pas de token")
+            return
         }
+        print("📤 [Dashboard] Envoi de l'image au TicketService...")
+        ticketService.uploadTicket(image: image, token: token)
     }
 }
 
-// ✅ THESE WERE MISSING - PASTE THESE AT THE BOTTOM OF THE FILE
-
-// --- TICKET ROW VIEW ---
+// --- VUE D'UNE LIGNE DE TICKET ---
 struct TicketRow: View {
     let ticket: Ticket
     
@@ -212,7 +259,6 @@ struct TicketRow: View {
             VStack(alignment: .leading) {
                 Text(ticket.merchantName ?? "Magasin Inconnu")
                     .fontWeight(.semibold)
-                    .foregroundColor(.primary)
                 
                 Text(ticket.date.formatted(date: .numeric, time: .shortened))
                     .font(.caption)
@@ -223,7 +269,6 @@ struct TicketRow: View {
             
             Text(String(format: "%.2f €", ticket.totalAmount ?? 0))
                 .fontWeight(.bold)
-                .foregroundColor(.primary)
         }
         .padding()
         .background(Color.white)
@@ -232,14 +277,14 @@ struct TicketRow: View {
     }
 }
 
-// --- RESULT VIEW ---
+// --- VUE DE RÉSULTAT DU SCAN ---
 struct ResultView: View {
     var image: UIImage?
     var resultText: String
     @Binding var isPresented: Bool
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
                     if let img = image {
@@ -250,7 +295,7 @@ struct ResultView: View {
                             .cornerRadius(12)
                     }
                     VStack(alignment: .leading) {
-                        Text("Résultat :").font(.headline)
+                        Text("Analyse IA (Ollama) :").font(.headline)
                         Text(resultText)
                             .font(.system(.body, design: .monospaced))
                             .padding()
@@ -259,9 +304,12 @@ struct ResultView: View {
                     }.padding()
                 }
             }
-            .navigationTitle("Analyse")
+            .navigationTitle("Résultat du Scan")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                Button("Fermer") { isPresented = false }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Fermer") { isPresented = false }
+                }
             }
         }
     }
