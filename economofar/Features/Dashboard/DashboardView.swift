@@ -1,20 +1,33 @@
 import SwiftUI
 import PhotosUI
 
+// MARK: - Local Model for Scanned Items
+struct ParsedItem: Identifiable, Hashable {
+    let id = UUID()
+    var name: String
+    var qty: Int
+    var price: Double
+}
+
 // MARK: - Dashboard View
 struct DashboardView: View {
     @EnvironmentObject var sessionManager: SessionManager
-    
-    // ✅ Injection du TicketService
     @StateObject private var ticketService = TicketService()
     
-    // --- ÉTATS ---
+    // --- STATES ---
     @State private var selectedPhotoItem: PhotosPickerItem? = nil
     @State private var selectedImage: UIImage? = nil
+    
+    // Data holding
     @State private var analysisResult: String = ""
+    
+    // UI Flags
     @State private var showResultSheet = false
     @State private var showScanner = false
     @State private var isPhotosPickerPresented = false
+    
+    // ✅ NEW STATE: Tracks if a scan is finished and waiting for the user
+    @State private var isScanReady = false
     
     var body: some View {
         NavigationStack {
@@ -23,18 +36,17 @@ struct DashboardView: View {
                 
                 // Content Layer
                 VStack(spacing: 20) {
-                    headerView          // Extracted Subview 1
-                    historyListView     // Extracted Subview 2
+                    headerView
+                    historyListView
                 }
                 
                 // Floating Button Layer
-                floatingActionButton    // Extracted Subview 3
+                floatingActionButton
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Déconnexion") { sessionManager.logout() }
-                        .font(.caption)
-                        .foregroundColor(.red)
+                        .font(.caption).foregroundColor(.red)
                 }
             }
             // Photos Picker Handler
@@ -42,33 +54,50 @@ struct DashboardView: View {
             .onChange(of: selectedPhotoItem) { newItem in
                 handlePhotoSelection(newItem)
             }
-            // Analysis Result Handler
+            // ✅ UPDATED LOGIC: Don't open sheet automatically. Just notify.
             .onChange(of: ticketService.lastScanResult) { newResult in
-                print("🟣 DASHBOARD: .onChange(lastScanResult) triggered")
                 if let result = newResult {
-                    print("🟣 DASHBOARD: Result received! Length: \(result.count) characters")
-                    print("🟣 DASHBOARD: Raw Content Preview: \(result.prefix(100))...")
-                    self.analysisResult = result
-                    self.showResultSheet = true
-                } else {
-                    print("🔴 DASHBOARD: Result is nil")
+                    Task { @MainActor in
+                        print("🟣 DASHBOARD: Scan finished. Waiting for user action.")
+                        self.analysisResult = result
+                        
+                        // We animate the appearance of the "Ready" button
+                        withAnimation(.spring()) {
+                            self.isScanReady = true
+                        }
+                    }
                 }
             }
-            // Sheets & Covers
-            .sheet(isPresented: $showResultSheet) {
-                ResultView(ticketService: ticketService, image: selectedImage, resultText: analysisResult, isPresented: $showResultSheet)
+            // Sheet Gatekeeper
+            .sheet(isPresented: $showResultSheet, onDismiss: {
+                // Reset the ready state when sheet closes
+                if ticketService.lastScanResult == nil {
+                    isScanReady = false
+                }
+            }) {
+                if !analysisResult.isEmpty {
+                    ResultView(
+                        ticketService: ticketService,
+                        image: selectedImage,
+                        resultText: analysisResult,
+                        isPresented: $showResultSheet
+                    )
+                } else {
+                    ProgressView("Chargement des données...")
+                        .presentationDetents([.medium])
+                }
             }
-            // Scanner Handler
             .fullScreenCover(isPresented: $showScanner) {
                 ScannerView(isPresented: $showScanner) { capturedImage in
                     print("📸 SCANNER: Image captured")
                     self.selectedImage = capturedImage
                     self.showScanner = false
                     
-                    // Trigger upload
                     if let token = sessionManager.token {
-                        print("🚀 SCANNER: Starting upload...")
-                        ticketService.uploadTicket(image: capturedImage, token: token)
+                        // Background upload
+                        Task {
+                            ticketService.uploadTicket(image: capturedImage, token: token)
+                        }
                     }
                 }
             }
@@ -143,12 +172,35 @@ struct DashboardView: View {
         }
     }
     
+    // ✅ UPDATED FLOATING BUTTON SECTION
     private var floatingActionButton: some View {
         VStack {
             Spacer()
+            
+            // 🟢 1. The "Scan Ready" Notification Button
+            if isScanReady {
+                Button(action: {
+                    self.showResultSheet = true
+                }) {
+                    HStack {
+                        Image(systemName: "checkmark.circle.fill")
+                        Text("Analyse terminée ! Voir le ticket")
+                            .fontWeight(.bold)
+                    }
+                    .padding()
+                    .background(Color.green)
+                    .foregroundColor(.white)
+                    .cornerRadius(30)
+                    .shadow(radius: 5)
+                }
+                .transition(.scale.combined(with: .opacity)) // Animation pop-in
+                .padding(.bottom, 10)
+            }
+            
+            // ⚫️ 2. The Main Action Button
             Menu {
                 Button(action: {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { showScanner = true }
+                    Task { @MainActor in self.showScanner = true }
                 }) { Label("Appareil Photo", systemImage: "camera") }
                 
                 Button(action: { isPhotosPickerPresented = true }) {
@@ -183,12 +235,8 @@ struct DashboardView: View {
         Task {
             if let data = try? await newItem?.loadTransferable(type: Data.self), let image = UIImage(data: data) {
                 await MainActor.run {
-                    print("🖼️ GALLERY: Image selected")
                     self.selectedImage = image
-                    if let token = sessionManager.token {
-                        print("🚀 GALLERY: Starting upload...")
-                        ticketService.uploadTicket(image: image, token: token)
-                    }
+                    if let token = sessionManager.token { ticketService.uploadTicket(image: image, token: token) }
                 }
             }
         }
@@ -252,6 +300,8 @@ struct ResultView: View {
     // Champs éditables
     @State private var merchantName: String = ""
     @State private var totalAmount: Double = 0.0
+    @State private var purchaseDate: String = ""
+    @State private var parsedItems: [ParsedItem] = []
     
     var body: some View {
         NavigationStack {
@@ -274,6 +324,13 @@ struct ResultView: View {
                                 .padding().background(Color.gray.opacity(0.1)).cornerRadius(8)
                         }
                         
+                        // Champ Date
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("Date").font(.caption).foregroundColor(.gray)
+                            TextField("Date (YYYY-MM-DD)", text: $purchaseDate)
+                                .padding().background(Color.gray.opacity(0.1)).cornerRadius(8)
+                        }
+                        
                         // Champ Montant
                         VStack(alignment: .leading, spacing: 5) {
                             Text("Total (€)").font(.caption).foregroundColor(.gray)
@@ -282,18 +339,39 @@ struct ResultView: View {
                                 .padding().background(Color.gray.opacity(0.1)).cornerRadius(8)
                         }
                         
+                        // Liste des articles
+                        if !parsedItems.isEmpty {
+                            Divider().padding(.vertical)
+                            Text("Articles détectés").font(.headline)
+                            
+                            ForEach($parsedItems) { $item in
+                                HStack {
+                                    TextField("Nom", text: $item.name)
+                                        .font(.subheadline)
+                                    Spacer()
+                                    Text("x\(item.qty)").font(.caption).foregroundColor(.gray)
+                                    TextField("Prix", value: $item.price, format: .number)
+                                        .frame(width: 60)
+                                        .multilineTextAlignment(.trailing)
+                                        .keyboardType(.decimalPad)
+                                }
+                                .padding(8)
+                                .background(Color.gray.opacity(0.05))
+                                .cornerRadius(8)
+                            }
+                        }
+                        
                         Divider().padding(.vertical)
                         
                         // Zone de debug pour voir ce que l'IA a renvoyé
-                        Text("Données brutes (Debug)")
-                            .font(.caption2).foregroundColor(.gray)
-                        Text(resultText).font(.system(size: 8, design: .monospaced))
-                            .lineLimit(4).foregroundColor(.gray)
+                        DisclosureGroup("Données brutes (Debug)") {
+                            Text(resultText).font(.system(size: 8, design: .monospaced))
+                                .foregroundColor(.gray)
+                        }
                     }.padding()
                     
                     Button(action: {
                         if let token = sessionManager.token {
-                            print("💾 SAVING: Merchant: \(merchantName), Total: \(totalAmount)")
                             ticketService.saveValidatedTicket(
                                 merchant: merchantName,
                                 amount: totalAmount,
@@ -315,96 +393,76 @@ struct ResultView: View {
             }
             .navigationTitle("Validation")
             .toolbar { Button("Annuler") { isPresented = false } }
-            // ✅ Trigger parsing on appearance AND when text changes
             .onAppear {
-                print("👀 RESULT VIEW: onAppear triggered")
-                parseRobustJSON()
-            }
-            .onChange(of: resultText) { newValue in
-                print("🔄 RESULT VIEW: resultText changed. New length: \(newValue.count)")
                 parseRobustJSON()
             }
         }
     }
     
-    // ✅ IMPROVED PARSING FUNCTION WITH LOGS
+    // ✅ ROBUST PARSING LOGIC (Updated for Items & Date)
     func parseRobustJSON() {
-        print("----- 🕵️ STARTING PARSING -----")
-        print("📥 Raw Input: \(resultText)")
+        print("🔍 STARTING ROBUST PARSING")
         
-        let cleanedText = cleanJSON(resultText)
-        print("🧹 Cleaned Input: \(cleanedText)")
+        let cleanedText = resultText
+            .replacingOccurrences(of: "```json", with: "")
+            .replacingOccurrences(of: "```", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         
-        var foundMerchant = false
-        var foundTotal = false
-        
-        // 1. First Attempt: Standard JSON Decoder (if pure JSON)
-        print("🔹 Attempting JSON Serialization...")
-        if let data = cleanedText.data(using: .utf8),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            
-            print("✅ JSON Serialization SUCCESS. Content: \(json)")
-            
-            if let merchant = json["merchant"] as? String {
-                self.merchantName = merchant
-                foundMerchant = true
-                print("✅ Merchant found via JSON: \(merchant)")
+        // 1. EXTRACT MERCHANT
+        let merchantPattern = #""merchant"\s*:\s*"([^"]+)""#
+        if let regex = try? NSRegularExpression(pattern: merchantPattern, options: .caseInsensitive) {
+            let nsString = cleanedText as NSString
+            if let match = regex.firstMatch(in: cleanedText, options: [], range: NSRange(location: 0, length: nsString.length)) {
+                self.merchantName = nsString.substring(with: match.range(at: 1))
             }
-            if let total = json["total"] as? Double {
-                self.totalAmount = total
-                foundTotal = true
-                print("✅ Total found via JSON: \(total)")
-            } else if let totalString = json["total"] as? String, let totalDouble = Double(totalString) {
-                self.totalAmount = totalDouble
-                foundTotal = true
-                print("✅ Total found via JSON (converted from string): \(totalDouble)")
-            }
-        } else {
-            print("⚠️ JSON Serialization FAILED")
         }
         
-        // 2. Second Attempt: Robust Regex (if JSON failed or was partial)
-        if !foundMerchant || self.merchantName.isEmpty {
-            print("🔹 Attempting Merchant Regex...")
-            // Case insensitive search for "merchant": "..."
-            let merchantPattern = "(?i)\"merchant\"\\s*:\\s*\"([^\"]+)\""
-            if let merchantRegex = try? NSRegularExpression(pattern: merchantPattern, options: []) {
-                let nsString = cleanedText as NSString
-                if let match = merchantRegex.firstMatch(in: cleanedText, options: [], range: NSRange(location: 0, length: nsString.length)) {
-                    self.merchantName = nsString.substring(with: match.range(at: 1))
-                    print("✅ Merchant found via Regex: \(self.merchantName)")
-                } else {
-                    print("❌ Merchant Regex found no match")
+        // 2. EXTRACT DATE
+        let datePattern = #""date"\s*:\s*"([^"]+)""#
+        if let regex = try? NSRegularExpression(pattern: datePattern, options: .caseInsensitive) {
+            let nsString = cleanedText as NSString
+            if let match = regex.firstMatch(in: cleanedText, options: [], range: NSRange(location: 0, length: nsString.length)) {
+                self.purchaseDate = nsString.substring(with: match.range(at: 1))
+            }
+        }
+        
+        // 3. EXTRACT TOTAL (First number found)
+        let totalPattern = #""total"\s*:\s*([0-9]+(?:\.[0-9]+)?)"#
+        if let regex = try? NSRegularExpression(pattern: totalPattern, options: .caseInsensitive) {
+            let nsString = cleanedText as NSString
+            if let match = regex.firstMatch(in: cleanedText, options: [], range: NSRange(location: 0, length: nsString.length)) {
+                let totalString = nsString.substring(with: match.range(at: 1))
+                if let val = Double(totalString) {
+                    self.totalAmount = val
                 }
             }
         }
         
-        if !foundTotal || self.totalAmount == 0.0 {
-            print("🔹 Attempting Total Regex...")
-            // Case insensitive search for "total": 123.45
-            let totalPattern = "(?i)\"total\"\\s*:\\s*([0-9.]+)"
-            if let totalRegex = try? NSRegularExpression(pattern: totalPattern, options: []) {
-                let nsString = cleanedText as NSString
-                if let match = totalRegex.firstMatch(in: cleanedText, options: [], range: NSRange(location: 0, length: nsString.length)) {
-                    let totalString = nsString.substring(with: match.range(at: 1))
-                    if let doubleValue = Double(totalString) {
-                        self.totalAmount = doubleValue
-                        print("✅ Total found via Regex: \(self.totalAmount)")
-                    }
-                } else {
-                    print("❌ Total Regex found no match")
+        // 4. EXTRACT ITEMS (Fallback to JSON Decoder for complex arrays)
+        if let data = cleanedText.data(using: .utf8) {
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let items = json["items"] as? [[String: Any]] {
+                
+                self.parsedItems = items.compactMap { dict in
+                    let name = dict["name"] as? String ?? "Article Inconnu"
+                    let qty = dict["qty"] as? Int ?? 1
+                    // Handle price which might be Int or Double in JSON
+                    var price = 0.0
+                    if let pDouble = dict["price"] as? Double { price = pDouble }
+                    else if let pInt = dict["price"] as? Int { price = Double(pInt) }
+                    
+                    return ParsedItem(name: name, qty: qty, price: price)
                 }
             }
         }
         
-        print("----- 🏁 PARSING FINISHED -----")
-        print("Final State -> Merchant: '\(self.merchantName)', Total: \(self.totalAmount)")
-    }
-    
-    // ✅ Helper to remove markdown (```json ... ```)
-    func cleanJSON(_ text: String) -> String {
-        var clean = text.replacingOccurrences(of: "```json", with: "")
-        clean = clean.replacingOccurrences(of: "```", with: "")
-        return clean.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 5. Fallback if JSON Decoder failed entirely for top-level fields
+        if self.merchantName.isEmpty && self.totalAmount == 0 {
+            if let data = cleanedText.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                self.merchantName = json["merchant"] as? String ?? ""
+                if let t = json["total"] as? Double { self.totalAmount = t }
+            }
+        }
     }
 }
