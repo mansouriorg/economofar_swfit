@@ -9,6 +9,7 @@ struct ParsedItem: Identifiable, Hashable {
     var name: String
     var qty: Int
     var price: Double
+    var category: String = "Alimentation"
 }
 
 // MARK: - 2. Visual Identity
@@ -44,6 +45,19 @@ enum EconomofarUI {
     )
 }
 
+enum EconomofarCategories {
+    static let all: [String] = [
+        "Alimentation",
+        "Transport",
+        "Santé",
+        "Shopping",
+        "Maison",
+        "Loisirs",
+        "Restaurant",
+        "Autre"
+    ]
+}
+
 // MARK: - 3. Dashboard View
 
 struct DashboardView: View {
@@ -68,6 +82,56 @@ struct DashboardView: View {
         String(firstName.prefix(1)).uppercased()
     }
 
+    private var scanCardIcon: String {
+        switch ticketService.scanStatus {
+        case .idle:
+            return "camera.viewfinder"
+        case .uploading:
+            return "icloud.and.arrow.up"
+        case .analyzing:
+            return "sparkles"
+        case .ocrCompleted:
+            return "doc.text.magnifyingglass"
+        case .needsReview:
+            return "checklist"
+        case .saved:
+            return "checkmark.seal"
+        case .failed:
+            return "exclamationmark.triangle"
+        }
+    }
+
+    private var scanCardTint: Color {
+        switch ticketService.scanStatus {
+        case .idle:
+            return EconomofarUI.accent
+        case .uploading, .analyzing:
+            return EconomofarUI.warning
+        case .ocrCompleted, .needsReview:
+            return EconomofarUI.accent
+        case .saved:
+            return EconomofarUI.success
+        case .failed:
+            return EconomofarUI.danger
+        }
+    }
+
+    private var scanCardValue: String {
+        if isScanReady {
+            return "Validation requise"
+        }
+
+        return ticketService.scanStatus.title
+    }
+
+    private var scanCardSubtitle: String {
+        if isScanReady {
+            return "Touchez pour vérifier"
+        }
+
+        return ticketService.scanStatusMessage ?? ticketService.scanStatus.subtitle
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -90,6 +154,15 @@ struct DashboardView: View {
                             )
                         }
 
+                        if let ticketErrorMessage = ticketService.errorMessage {
+                            DashboardInfoBanner(
+                                icon: "exclamationmark.triangle.fill",
+                                message: ticketErrorMessage,
+                                tint: EconomofarUI.danger,
+                                background: EconomofarUI.dangerSoft
+                            )
+                        }
+
                         smartCardsSection
                         spendingAnalyticsSection
                         merchantAnalyticsSection
@@ -106,6 +179,7 @@ struct DashboardView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
+                        ticketService.stopPollingScanStatus()
                         sessionManager.logout()
                     } label: {
                         HStack(spacing: 5) {
@@ -137,6 +211,19 @@ struct DashboardView: View {
 
                     withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
                         isScanReady = true
+                    }
+                }
+            }
+            .onChange(of: ticketService.scanStatus) { newStatus in
+                if newStatus == .saved {
+                    withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
+                        isScanReady = false
+                    }
+                }
+
+                if newStatus == .failed {
+                    withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
+                        isScanReady = false
                     }
                 }
             }
@@ -184,7 +271,11 @@ struct DashboardView: View {
 
             if let token = sessionManager.token {
                 ticketService.fetchTickets(token: token)
+                ticketService.restoreActiveScan(token: token)
             }
+        }
+        .onDisappear {
+            ticketService.stopPollingScanStatus()
         }
     }
 
@@ -263,19 +354,21 @@ struct DashboardView: View {
                     tint: EconomofarUI.accentDark
                 )
 
-                SmartDashboardCard(
-                    icon: ticketService.isLoading ? "hourglass" : "checkmark.seal",
-                    title: "Dernier scan",
-                    value: dashboardViewModel.lastScanStatusText(
-                        isScanning: ticketService.isLoading,
-                        isScanReady: isScanReady
-                    ),
-                    subtitle: dashboardViewModel.lastScanSubtitle(
-                        isScanning: ticketService.isLoading,
-                        isScanReady: isScanReady
-                    ),
-                    tint: ticketService.isLoading ? EconomofarUI.warning : EconomofarUI.success
-                )
+                Button {
+                    if isScanReady && !analysisResult.isEmpty {
+                        showResultSheet = true
+                    }
+                } label: {
+                    SmartDashboardCard(
+                        icon: scanCardIcon,
+                        title: "Dernier scan",
+                        value: scanCardValue,
+                        subtitle: scanCardSubtitle,
+                        tint: scanCardTint
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(!isScanReady || analysisResult.isEmpty)
 
                 SmartDashboardCard(
                     icon: dashboardViewModel.isBudgetExceeded ? "exclamationmark.triangle" : "wallet.pass",
@@ -482,7 +575,7 @@ struct DashboardView: View {
                         ProgressView()
                             .tint(.white)
 
-                        Text("Analyse en cours")
+                        Text(ticketService.scanStatus.title)
                             .fontWeight(.bold)
                     } else {
                         Image(systemName: "camera.viewfinder")
@@ -511,6 +604,7 @@ struct DashboardView: View {
 
         if let token = sessionManager.token {
             ticketService.fetchTickets(token: token)
+            ticketService.restoreActiveScan(token: token)
         }
     }
 
@@ -522,6 +616,14 @@ struct DashboardView: View {
         Task {
             try? await Task.sleep(nanoseconds: 800_000_000)
             await dashboardViewModel.loadDashboard(token: sessionManager.token)
+
+            await MainActor.run {
+                if ticketService.scanStatus == .saved {
+                    isScanReady = false
+                    analysisResult = ""
+                    selectedImage = nil
+                }
+            }
         }
     }
 
@@ -887,7 +989,19 @@ struct ResultView: View {
     @State private var merchantName: String = ""
     @State private var totalAmount: Double = 0.0
     @State private var purchaseDate: String = ""
-    @State private var parsedItems: [ParsedItem] = []
+    @State private var ticketCategory: String = "Alimentation"
+    @State private var editableItems: [EditableTicketItemDraft] = []
+    @State private var hasParsed = false
+
+    private var computedItemsTotal: Double {
+        editableItems.reduce(0.0) { partialResult, item in
+            partialResult + item.totalPrice
+        }
+    }
+
+    private var displayItemsTotal: String {
+        String(format: "%.2f €", computedItemsTotal)
+    }
 
     var body: some View {
         NavigationStack {
@@ -899,7 +1013,7 @@ struct ResultView: View {
                     VStack(spacing: 18) {
                         imagePreview
                         validationCard
-                        detectedItemsCard
+                        editableItemsCard
                         confirmButton
                     }
                     .padding(.horizontal, 20)
@@ -918,7 +1032,10 @@ struct ResultView: View {
                 }
             }
             .onAppear {
-                parseRobustJSON()
+                if !hasParsed {
+                    parseRobustJSON()
+                    hasParsed = true
+                }
             }
         }
     }
@@ -968,7 +1085,7 @@ struct ResultView: View {
                     .font(.system(size: 22, weight: .bold, design: .rounded))
                     .foregroundColor(EconomofarUI.textPrimary)
 
-                Text("Corrigez les informations avant l’enregistrement.")
+                Text("Vous pouvez modifier l’enseigne, la date, le total, la catégorie et les articles.")
                     .font(.system(size: 14, weight: .medium, design: .rounded))
                     .foregroundColor(EconomofarUI.textSecondary)
             }
@@ -988,6 +1105,27 @@ struct ResultView: View {
             )
 
             VStack(alignment: .leading, spacing: 8) {
+                Label("Catégorie du ticket", systemImage: "tag")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundColor(EconomofarUI.textSecondary)
+
+                Picker("Catégorie", selection: $ticketCategory) {
+                    ForEach(EconomofarCategories.all, id: \.self) { category in
+                        Text(category).tag(category)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+                .background(EconomofarUI.cardSoft)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(EconomofarUI.border, lineWidth: 1)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
                 Label("Total", systemImage: "eurosign.circle")
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .foregroundColor(EconomofarUI.textSecondary)
@@ -1003,6 +1141,23 @@ struct ResultView: View {
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
                             .stroke(EconomofarUI.border, lineWidth: 1)
                     }
+
+                HStack {
+                    Text("Total des articles : \(displayItemsTotal)")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundColor(EconomofarUI.textSecondary)
+
+                    Spacer()
+
+                    Button {
+                        totalAmount = computedItemsTotal
+                    } label: {
+                        Text("Recalculer")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundColor(EconomofarUI.accent)
+                    }
+                    .disabled(editableItems.isEmpty)
+                }
             }
         }
         .padding(18)
@@ -1015,58 +1170,69 @@ struct ResultView: View {
         .shadow(color: Color.black.opacity(0.035), radius: 14, x: 0, y: 8)
     }
 
-    @ViewBuilder
-    private var detectedItemsCard: some View {
-        if !parsedItems.isEmpty {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Articles détectés")
-                            .font(.system(size: 18, weight: .bold, design: .rounded))
-                            .foregroundColor(EconomofarUI.textPrimary)
+    private var editableItemsCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Articles détectés")
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                        .foregroundColor(EconomofarUI.textPrimary)
 
-                        Text("\(parsedItems.count) article\(parsedItems.count > 1 ? "s" : "")")
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
-                            .foregroundColor(EconomofarUI.textSecondary)
-                    }
-
-                    Spacer()
-
-                    Image(systemName: "list.bullet.rectangle")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundColor(EconomofarUI.accent)
+                    Text("\(editableItems.count) article\(editableItems.count > 1 ? "s" : "") modifiable\(editableItems.count > 1 ? "s" : "")")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundColor(EconomofarUI.textSecondary)
                 }
 
-                VStack(spacing: 10) {
-                    ForEach(parsedItems) { item in
-                        ParsedItemRow(item: item)
+                Spacer()
+
+                Button {
+                    addNewItem()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 12, weight: .bold))
+
+                        Text("Ajouter")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 12)
+                    .background(EconomofarUI.accent)
+                    .clipShape(Capsule())
+                }
+            }
+
+            if editableItems.isEmpty {
+                EmptyEditableItemsView {
+                    addNewItem()
+                }
+            } else {
+                VStack(spacing: 12) {
+                    ForEach($editableItems) { $item in
+                        EditableTicketItemRow(
+                            item: $item,
+                            onDelete: {
+                                deleteItem(item)
+                            }
+                        )
                     }
                 }
             }
-            .padding(18)
-            .background(EconomofarUI.card)
-            .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 26, style: .continuous)
-                    .stroke(EconomofarUI.border, lineWidth: 1)
-            }
-            .shadow(color: Color.black.opacity(0.035), radius: 14, x: 0, y: 8)
         }
+        .padding(18)
+        .background(EconomofarUI.card)
+        .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .stroke(EconomofarUI.border, lineWidth: 1)
+        }
+        .shadow(color: Color.black.opacity(0.035), radius: 14, x: 0, y: 8)
     }
 
     private var confirmButton: some View {
         Button {
-            if let token = sessionManager.token {
-                ticketService.saveValidatedTicket(
-                    merchant: merchantName,
-                    amount: totalAmount,
-                    rawOcr: resultText,
-                    token: token
-                )
-
-                onSaved?()
-                isPresented = false
-            }
+            saveEditableTicket()
         } label: {
             HStack(spacing: 10) {
                 if ticketService.isLoading {
@@ -1090,7 +1256,56 @@ struct ResultView: View {
         .disabled(ticketService.isLoading)
     }
 
-    func parseRobustJSON() {
+    private func saveEditableTicket() {
+        guard let token = sessionManager.token else {
+            return
+        }
+
+        let finalMerchant = merchantName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        ? "Commerçant inconnu"
+        : merchantName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let finalDate = purchaseDate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        ? ISO8601DateFormatter().string(from: Date())
+        : purchaseDate.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let finalItems = editableItems.map { $0.request }
+
+        ticketService.saveValidatedTicket(
+            merchant: finalMerchant,
+            amount: totalAmount,
+            purchaseDate: finalDate,
+            category: ticketCategory,
+            items: finalItems,
+            rawOcr: resultText,
+            token: token
+        )
+
+        onSaved?()
+        isPresented = false
+    }
+
+    private func addNewItem() {
+        let newItem = EditableTicketItemDraft(
+            name: "",
+            quantity: 1,
+            unitPrice: nil,
+            totalPrice: 0.0,
+            category: ticketCategory
+        )
+
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
+            editableItems.append(newItem)
+        }
+    }
+
+    private func deleteItem(_ item: EditableTicketItemDraft) {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
+            editableItems.removeAll { $0.id == item.id }
+        }
+    }
+
+    private func parseRobustJSON() {
         let cleanedText = resultText
             .replacingOccurrences(of: "```json", with: "")
             .replacingOccurrences(of: "```", with: "")
@@ -1119,51 +1334,113 @@ struct ResultView: View {
         }
 
         if let regex = try? NSRegularExpression(
-            pattern: #""total"\s*:\s*([0-9]+(?:\.[0-9]+)?)"#,
+            pattern: #""category"\s*:\s*"([^"]+)""#,
             options: .caseInsensitive
         ),
            let match = regex.firstMatch(
             in: cleanedText,
             range: NSRange(location: 0, length: cleanedText.count)
            ) {
-            let value = (cleanedText as NSString).substring(with: match.range(at: 1))
+            let parsedCategory = (cleanedText as NSString).substring(with: match.range(at: 1))
+            if EconomofarCategories.all.contains(parsedCategory) {
+                ticketCategory = parsedCategory
+            }
+        }
+
+        if let regex = try? NSRegularExpression(
+            pattern: #""total"\s*:\s*([0-9]+(?:[\.,][0-9]+)?)"#,
+            options: .caseInsensitive
+        ),
+           let match = regex.firstMatch(
+            in: cleanedText,
+            range: NSRange(location: 0, length: cleanedText.count)
+           ) {
+            let value = (cleanedText as NSString)
+                .substring(with: match.range(at: 1))
+                .replacingOccurrences(of: ",", with: ".")
+
             totalAmount = Double(value) ?? 0.0
         }
 
         guard
             let data = cleanedText.data(using: .utf8),
-            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let items = json["items"] as? [[String: Any]]
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
             return
         }
 
-        parsedItems = items.compactMap { dict in
-            let name = dict["name"] as? String ?? "Article"
+        if let merchant = json["merchant"] as? String, !merchant.isEmpty {
+            merchantName = merchant
+        }
 
-            let qty: Int
-            if let value = dict["qty"] as? Int {
-                qty = value
-            } else if let value = dict["qty"] as? Double {
-                qty = Int(value)
-            } else if let value = dict["qty"] as? String {
-                qty = Int(value) ?? 1
-            } else {
-                qty = 1
+        if let date = json["date"] as? String, !date.isEmpty {
+            purchaseDate = date
+        }
+
+        if let category = json["category"] as? String, EconomofarCategories.all.contains(category) {
+            ticketCategory = category
+        }
+
+        if let total = json["total"] as? Double {
+            totalAmount = total
+        } else if let total = json["total"] as? Int {
+            totalAmount = Double(total)
+        } else if let total = json["total"] as? String {
+            totalAmount = Double(total.replacingOccurrences(of: ",", with: ".")) ?? totalAmount
+        }
+
+        if let items = json["items"] as? [[String: Any]] {
+            editableItems = items.compactMap { dict in
+                let name = dict["name"] as? String ?? "Article"
+
+                let qty: Int
+                if let value = dict["qty"] as? Int {
+                    qty = value
+                } else if let value = dict["quantity"] as? Int {
+                    qty = value
+                } else if let value = dict["qty"] as? Double {
+                    qty = Int(value)
+                } else if let value = dict["quantity"] as? Double {
+                    qty = Int(value)
+                } else if let value = dict["qty"] as? String {
+                    qty = Int(value) ?? 1
+                } else if let value = dict["quantity"] as? String {
+                    qty = Int(value) ?? 1
+                } else {
+                    qty = 1
+                }
+
+                let price: Double
+                if let value = dict["price"] as? Double {
+                    price = value
+                } else if let value = dict["totalPrice"] as? Double {
+                    price = value
+                } else if let value = dict["price"] as? Int {
+                    price = Double(value)
+                } else if let value = dict["totalPrice"] as? Int {
+                    price = Double(value)
+                } else if let value = dict["price"] as? String {
+                    price = Double(value.replacingOccurrences(of: ",", with: ".")) ?? 0.0
+                } else if let value = dict["totalPrice"] as? String {
+                    price = Double(value.replacingOccurrences(of: ",", with: ".")) ?? 0.0
+                } else {
+                    price = 0.0
+                }
+
+                let itemCategory = dict["category"] as? String ?? ticketCategory
+
+                return EditableTicketItemDraft(
+                    name: name,
+                    quantity: max(qty, 1),
+                    unitPrice: nil,
+                    totalPrice: price,
+                    category: EconomofarCategories.all.contains(itemCategory) ? itemCategory : ticketCategory
+                )
             }
+        }
 
-            let price: Double
-            if let value = dict["price"] as? Double {
-                price = value
-            } else if let value = dict["price"] as? Int {
-                price = Double(value)
-            } else if let value = dict["price"] as? String {
-                price = Double(value.replacingOccurrences(of: ",", with: ".")) ?? 0.0
-            } else {
-                price = 0.0
-            }
-
-            return ParsedItem(name: name, qty: qty, price: price)
+        if totalAmount == 0.0 && !editableItems.isEmpty {
+            totalAmount = computedItemsTotal
         }
     }
 }
@@ -1196,7 +1473,150 @@ struct StyledTextField: View {
     }
 }
 
-// MARK: - 12. Parsed Item Row
+// MARK: - 12. Editable Item Row
+
+struct EditableTicketItemRow: View {
+    @Binding var item: EditableTicketItemDraft
+    let onDelete: () -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(EconomofarUI.accentSoft)
+                        .frame(width: 38, height: 38)
+
+                    Image(systemName: "bag")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(EconomofarUI.accent)
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    TextField("Nom de l’article", text: $item.name)
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundColor(EconomofarUI.textPrimary)
+                        .padding(12)
+                        .background(EconomofarUI.card)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(EconomofarUI.border, lineWidth: 1)
+                        }
+
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Quantité")
+                                .font(.system(size: 11, weight: .bold, design: .rounded))
+                                .foregroundColor(EconomofarUI.textSecondary)
+
+                            Stepper(value: $item.quantity, in: 1...99) {
+                                Text("x\(item.quantity)")
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                                    .foregroundColor(EconomofarUI.textPrimary)
+                            }
+                        }
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Prix")
+                                .font(.system(size: 11, weight: .bold, design: .rounded))
+                                .foregroundColor(EconomofarUI.textSecondary)
+
+                            TextField("0.00", value: $item.totalPrice, format: .number)
+                                .keyboardType(.decimalPad)
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .foregroundColor(EconomofarUI.textPrimary)
+                                .padding(10)
+                                .background(EconomofarUI.card)
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .stroke(EconomofarUI.border, lineWidth: 1)
+                                }
+                        }
+                        .frame(width: 105)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Catégorie")
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .foregroundColor(EconomofarUI.textSecondary)
+
+                        Picker("Catégorie", selection: $item.category) {
+                            ForEach(EconomofarCategories.all, id: \.self) { category in
+                                Text(category).tag(category)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .background(EconomofarUI.card)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(EconomofarUI.border, lineWidth: 1)
+                        }
+                    }
+                }
+
+                Button {
+                    onDelete()
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(EconomofarUI.danger)
+                        .frame(width: 34, height: 34)
+                        .background(EconomofarUI.dangerSoft)
+                        .clipShape(Circle())
+                }
+            }
+        }
+        .padding(12)
+        .background(EconomofarUI.cardSoft)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+}
+
+// MARK: - 13. Empty Editable Items View
+
+struct EmptyEditableItemsView: View {
+    let onAdd: () -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "list.bullet.rectangle")
+                .font(.system(size: 26, weight: .semibold))
+                .foregroundColor(EconomofarUI.accent)
+
+            Text("Aucun article détecté")
+                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .foregroundColor(EconomofarUI.textPrimary)
+
+            Text("Vous pouvez ajouter les articles manuellement avant l’enregistrement.")
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundColor(EconomofarUI.textSecondary)
+                .multilineTextAlignment(.center)
+
+            Button {
+                onAdd()
+            } label: {
+                Text("Ajouter un article")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+                    .padding(.vertical, 10)
+                    .padding(.horizontal, 16)
+                    .background(EconomofarUI.accent)
+                    .clipShape(Capsule())
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(20)
+        .background(EconomofarUI.cardSoft)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+}
+
+// MARK: - 14. Parsed Item Row
 
 struct ParsedItemRow: View {
     let item: ParsedItem
@@ -1240,7 +1660,7 @@ struct ParsedItemRow: View {
     }
 }
 
-// MARK: - 13. Loading Sheet View
+// MARK: - 15. Loading Sheet View
 
 struct LoadingSheetView: View {
     var body: some View {
@@ -1264,7 +1684,7 @@ struct LoadingSheetView: View {
     }
 }
 
-// MARK: - 14. Ticket Detail View
+// MARK: - 16. Ticket Detail View
 
 struct TicketDetailView: View {
     let ticket: Ticket
@@ -1414,9 +1834,15 @@ struct TicketDetailView: View {
             let qty: Int
             if let value = dict["qty"] as? Int {
                 qty = value
+            } else if let value = dict["quantity"] as? Int {
+                qty = value
             } else if let value = dict["qty"] as? Double {
                 qty = Int(value)
+            } else if let value = dict["quantity"] as? Double {
+                qty = Int(value)
             } else if let value = dict["qty"] as? String {
+                qty = Int(value) ?? 1
+            } else if let value = dict["quantity"] as? String {
                 qty = Int(value) ?? 1
             } else {
                 qty = 1
@@ -1425,20 +1851,33 @@ struct TicketDetailView: View {
             let price: Double
             if let value = dict["price"] as? Double {
                 price = value
+            } else if let value = dict["totalPrice"] as? Double {
+                price = value
             } else if let value = dict["price"] as? Int {
                 price = Double(value)
+            } else if let value = dict["totalPrice"] as? Int {
+                price = Double(value)
             } else if let value = dict["price"] as? String {
+                price = Double(value.replacingOccurrences(of: ",", with: ".")) ?? 0.0
+            } else if let value = dict["totalPrice"] as? String {
                 price = Double(value.replacingOccurrences(of: ",", with: ".")) ?? 0.0
             } else {
                 price = 0.0
             }
 
-            return ParsedItem(name: name, qty: qty, price: price)
+            let category = dict["category"] as? String ?? "Alimentation"
+
+            return ParsedItem(
+                name: name,
+                qty: max(qty, 1),
+                price: price,
+                category: category
+            )
         }
     }
 }
 
-// MARK: - 15. Date Helper
+// MARK: - 17. Date Helper
 
 enum TicketDateHelper {
     static func shortDate(from dateString: String?) -> String {
