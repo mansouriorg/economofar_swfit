@@ -47,6 +47,7 @@ struct SettingsView: View {
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 22) {
                         profileCard
+                        profileSection
 
                         if let errorMessage = viewModel.errorMessage {
                             SettingsInfoBanner(
@@ -156,6 +157,22 @@ struct SettingsView: View {
                 .stroke(SettingsDesign.border, lineWidth: 1)
         }
         .shadow(color: Color.black.opacity(0.045), radius: 18, x: 0, y: 10)
+    }
+
+    private var profileSection: some View {
+        SettingsSectionCard(title: "Profil") {
+            NavigationLink {
+                EditProfileView()
+            } label: {
+                SettingsNavigationRow(
+                    icon: "person.crop.circle",
+                    title: "Modifier mon profil",
+                    subtitle: "Nom, email, entreprise, devise et langue",
+                    tint: SettingsDesign.accent
+                )
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     private var notificationsSection: some View {
