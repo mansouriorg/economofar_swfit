@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UIKit
 
 // MARK: - 1. Models
 
@@ -28,6 +29,12 @@ enum EconomofarUI {
     static let success = Color(.sRGB, red: 0.059, green: 0.522, blue: 0.329, opacity: 1)
     static let successSoft = Color(.sRGB, red: 0.902, green: 0.976, blue: 0.941, opacity: 1)
 
+    static let warning = Color(.sRGB, red: 0.718, green: 0.475, blue: 0.122, opacity: 1)
+    static let warningSoft = Color(.sRGB, red: 1.000, green: 0.969, blue: 0.902, opacity: 1)
+
+    static let danger = Color(.sRGB, red: 0.863, green: 0.149, blue: 0.149, opacity: 1)
+    static let dangerSoft = Color(.sRGB, red: 0.996, green: 0.898, blue: 0.898, opacity: 1)
+
     static let border = Color(.sRGB, red: 0.894, green: 0.910, blue: 0.941, opacity: 1)
 
     static let mainGradient = LinearGradient(
@@ -41,7 +48,9 @@ enum EconomofarUI {
 
 struct DashboardView: View {
     @EnvironmentObject var sessionManager: SessionManager
+
     @StateObject private var ticketService = TicketService()
+    @StateObject private var dashboardViewModel = DashboardViewModel()
 
     @State private var selectedPhotoItem: PhotosPickerItem? = nil
     @State private var selectedImage: UIImage? = nil
@@ -59,13 +68,37 @@ struct DashboardView: View {
         String(firstName.prefix(1)).uppercased()
     }
 
-    private var totalScannedAmount: Double {
+    private var fallbackTotalScannedAmount: Double {
         ticketService.tickets.compactMap { $0.totalAmount }.reduce(0, +)
     }
 
-    private var averageBasket: Double {
+    private var fallbackAverageBasket: Double {
         guard !ticketService.tickets.isEmpty else { return 0 }
-        return totalScannedAmount / Double(ticketService.tickets.count)
+        return fallbackTotalScannedAmount / Double(ticketService.tickets.count)
+    }
+
+    private var displayedTotalScannedAmount: String {
+        if dashboardViewModel.insights != nil {
+            return dashboardViewModel.totalScannedAmountText
+        }
+
+        return formatCurrency(fallbackTotalScannedAmount)
+    }
+
+    private var displayedTicketCount: String {
+        if dashboardViewModel.insights != nil {
+            return dashboardViewModel.ticketCountText
+        }
+
+        return "\(ticketService.tickets.count)"
+    }
+
+    private var displayedAverageBasket: String {
+        if dashboardViewModel.insights != nil {
+            return dashboardViewModel.averageBasketText
+        }
+
+        return formatCurrency(fallbackAverageBasket)
     }
 
     var body: some View {
@@ -73,9 +106,31 @@ struct DashboardView: View {
             ZStack {
                 DashboardBackground()
 
-                VStack(spacing: 0) {
-                    headerView
-                    historyListView
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 22) {
+                        headerView
+
+                        if dashboardViewModel.isLoading && dashboardViewModel.insights == nil {
+                            dashboardLoadingCard
+                        }
+
+                        if let errorMessage = dashboardViewModel.errorMessage {
+                            DashboardInfoBanner(
+                                icon: "exclamationmark.triangle.fill",
+                                message: errorMessage,
+                                tint: EconomofarUI.danger,
+                                background: EconomofarUI.dangerSoft
+                            )
+                        }
+
+                        spendingAnalyticsSection
+                        merchantAnalyticsSection
+                        historyListView
+                    }
+                    .padding(.bottom, 145)
+                }
+                .refreshable {
+                    await refreshAllData()
                 }
 
                 floatingActionButton
@@ -127,7 +182,10 @@ struct DashboardView: View {
                         ticketService: ticketService,
                         image: selectedImage,
                         resultText: analysisResult,
-                        isPresented: $showResultSheet
+                        isPresented: $showResultSheet,
+                        onSaved: {
+                            refreshAfterTicketSave()
+                        }
                     )
                     .environmentObject(sessionManager)
                 } else {
@@ -147,6 +205,9 @@ struct DashboardView: View {
                     }
                 }
             }
+        }
+        .task {
+            await dashboardViewModel.loadDashboard()
         }
         .onAppear {
             ticketService.onUnauthorized = {
@@ -178,30 +239,144 @@ struct DashboardView: View {
                 AvatarView(letter: avatarLetter)
             }
 
-            TotalOverviewCard(
-                amount: formatCurrency(totalScannedAmount),
-                ticketCount: ticketService.tickets.count
+            MonthlyOverviewCard(
+                amount: dashboardViewModel.totalSpentThisMonthText,
+                comparisonText: dashboardViewModel.monthlyComparisonText,
+                comparisonIsPositive: dashboardViewModel.monthlyComparisonIsPositive,
+                isComparisonAvailable: dashboardViewModel.insights?.monthlyComparisonPercentage != nil
             )
 
             HStack(spacing: 12) {
                 MiniStatCard(
-                    title: "Tickets",
-                    value: "\(ticketService.tickets.count)",
-                    icon: "receipt",
+                    title: "Total scanné",
+                    value: displayedTotalScannedAmount,
+                    icon: "creditcard",
                     tint: EconomofarUI.accent
                 )
 
                 MiniStatCard(
+                    title: "Tickets",
+                    value: displayedTicketCount,
+                    icon: "receipt",
+                    tint: EconomofarUI.success
+                )
+            }
+
+            HStack(spacing: 12) {
+                MiniStatCard(
                     title: "Panier moyen",
-                    value: formatCurrency(averageBasket),
+                    value: displayedAverageBasket,
                     icon: "cart",
+                    tint: EconomofarUI.warning
+                )
+
+                MiniStatCard(
+                    title: "Cette semaine",
+                    value: dashboardViewModel.totalSpentThisWeekText,
+                    icon: "calendar.badge.clock",
                     tint: EconomofarUI.accentDark
                 )
             }
         }
         .padding(.horizontal, 20)
         .padding(.top, 14)
-        .padding(.bottom, 20)
+    }
+
+    private var dashboardLoadingCard: some View {
+        HStack(spacing: 14) {
+            ProgressView()
+                .tint(EconomofarUI.accent)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Chargement du dashboard")
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundColor(EconomofarUI.textPrimary)
+
+                Text("Calcul des statistiques en cours.")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundColor(EconomofarUI.textSecondary)
+            }
+
+            Spacer()
+        }
+        .padding(16)
+        .background(EconomofarUI.card)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(EconomofarUI.border, lineWidth: 1)
+        }
+        .padding(.horizontal, 20)
+    }
+
+    private var spendingAnalyticsSection: some View {
+        DashboardSectionCard(title: "Analyse des dépenses") {
+            VStack(spacing: 0) {
+                DashboardInsightRow(
+                    icon: "calendar",
+                    title: "Total ce mois-ci",
+                    subtitle: "Dépenses du mois en cours",
+                    value: dashboardViewModel.totalSpentThisMonthText,
+                    tint: EconomofarUI.accent
+                )
+
+                DashboardDivider()
+
+                DashboardInsightRow(
+                    icon: "calendar.badge.minus",
+                    title: "Mois dernier",
+                    subtitle: "Total dépensé le mois précédent",
+                    value: dashboardViewModel.totalSpentLastMonthText,
+                    tint: EconomofarUI.textSecondary
+                )
+
+                DashboardDivider()
+
+                DashboardInsightRow(
+                    icon: dashboardViewModel.monthlyComparisonIsPositive ? "arrow.up.right" : "arrow.down.right",
+                    title: "Comparaison",
+                    subtitle: "Évolution par rapport au mois dernier",
+                    value: dashboardViewModel.monthlyComparisonText,
+                    tint: dashboardViewModel.monthlyComparisonIsPositive ? EconomofarUI.danger : EconomofarUI.success
+                )
+
+                DashboardDivider()
+
+                DashboardInsightRow(
+                    icon: "chart.bar",
+                    title: "Moyenne par ticket",
+                    subtitle: "Montant moyen de vos achats",
+                    value: dashboardViewModel.averageTicketAmountText,
+                    tint: EconomofarUI.warning
+                )
+            }
+        }
+        .padding(.horizontal, 20)
+    }
+
+    private var merchantAnalyticsSection: some View {
+        DashboardSectionCard(title: "Commerçants") {
+            VStack(spacing: 0) {
+                DashboardInsightRow(
+                    icon: "storefront",
+                    title: "Commerçant le plus fréquent",
+                    subtitle: "Celui qui apparaît le plus souvent",
+                    value: dashboardViewModel.mostFrequentMerchantText,
+                    tint: EconomofarUI.accent
+                )
+
+                DashboardDivider()
+
+                DashboardInsightRow(
+                    icon: "crown",
+                    title: "Ticket le plus élevé",
+                    subtitle: "Votre plus grosse dépense enregistrée",
+                    value: dashboardViewModel.highestReceiptText,
+                    tint: EconomofarUI.warning
+                )
+            }
+        }
+        .padding(.horizontal, 20)
     }
 
     private var historyListView: some View {
@@ -227,28 +402,20 @@ struct DashboardView: View {
             }
             .padding(.horizontal, 20)
 
-            ScrollView(showsIndicators: false) {
-                LazyVStack(spacing: 12) {
-                    if ticketService.tickets.isEmpty && !ticketService.isLoading {
-                        EmptyTicketsView()
-                            .padding(.top, 26)
-                    } else {
-                        ForEach(ticketService.tickets) { ticket in
-                            NavigationLink(destination: TicketDetailView(ticket: ticket)) {
-                                TicketRow(ticket: ticket)
-                            }
-                            .buttonStyle(.plain)
+            LazyVStack(spacing: 12) {
+                if ticketService.tickets.isEmpty && !ticketService.isLoading {
+                    EmptyTicketsView()
+                        .padding(.top, 4)
+                } else {
+                    ForEach(ticketService.tickets) { ticket in
+                        NavigationLink(destination: TicketDetailView(ticket: ticket)) {
+                            TicketRow(ticket: ticket)
                         }
+                        .buttonStyle(.plain)
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 145)
             }
-            .refreshable {
-                if let token = sessionManager.token {
-                    ticketService.fetchTickets(token: token)
-                }
-            }
+            .padding(.horizontal, 20)
         }
     }
 
@@ -332,8 +499,34 @@ struct DashboardView: View {
         }
     }
 
+    private func refreshAllData() async {
+        await dashboardViewModel.refresh()
+
+        if let token = sessionManager.token {
+            ticketService.fetchTickets(token: token)
+        }
+    }
+
+    private func refreshAfterTicketSave() {
+        if let token = sessionManager.token {
+            ticketService.fetchTickets(token: token)
+        }
+
+        Task {
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            await dashboardViewModel.loadDashboard()
+        }
+    }
+
     private func formatCurrency(_ amount: Double) -> String {
-        String(format: "%.2f €", amount)
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = "EUR"
+        formatter.locale = Locale(identifier: "fr_FR")
+        formatter.maximumFractionDigits = 2
+        formatter.minimumFractionDigits = 2
+
+        return formatter.string(from: NSNumber(value: amount)) ?? String(format: "%.2f €", amount)
     }
 
     private func handlePhotoSelection(_ newItem: PhotosPickerItem?) {
@@ -402,7 +595,78 @@ struct AvatarView: View {
     }
 }
 
-// MARK: - 6. Total Overview Card
+// MARK: - 6. Monthly Overview Card
+
+struct MonthlyOverviewCard: View {
+    let amount: String
+    let comparisonText: String
+    let comparisonIsPositive: Bool
+    let isComparisonAvailable: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Ce mois-ci")
+                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .foregroundColor(EconomofarUI.textSecondary)
+
+                    Text(amount)
+                        .font(.system(size: 38, weight: .bold, design: .rounded))
+                        .foregroundColor(EconomofarUI.textPrimary)
+                        .minimumScaleFactor(0.7)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                ZStack {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(EconomofarUI.accentSoft)
+                        .frame(width: 52, height: 52)
+
+                    Image(systemName: "chart.line.uptrend.xyaxis")
+                        .font(.system(size: 21, weight: .semibold))
+                        .foregroundColor(EconomofarUI.accent)
+                }
+            }
+
+            Divider()
+                .background(EconomofarUI.border)
+
+            HStack(spacing: 10) {
+                Image(
+                    systemName: isComparisonAvailable
+                    ? (comparisonIsPositive ? "arrow.up.right.circle.fill" : "arrow.down.right.circle.fill")
+                    : "minus.circle.fill"
+                )
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(
+                    isComparisonAvailable
+                    ? (comparisonIsPositive ? EconomofarUI.danger : EconomofarUI.success)
+                    : EconomofarUI.textTertiary
+                )
+
+                Text(comparisonText)
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundColor(EconomofarUI.textSecondary)
+                    .lineLimit(2)
+
+                Spacer()
+            }
+        }
+        .padding(20)
+        .background(EconomofarUI.card)
+        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(EconomofarUI.border, lineWidth: 1)
+        }
+        .shadow(color: Color.black.opacity(0.055), radius: 22, x: 0, y: 12)
+    }
+}
+
+// MARK: - 7. Total Overview Card
 
 struct TotalOverviewCard: View {
     let amount: String
@@ -470,7 +734,7 @@ struct TotalOverviewCard: View {
     }
 }
 
-// MARK: - 7. Mini Stat Card
+// MARK: - 8. Mini Stat Card
 
 struct MiniStatCard: View {
     let title: String
@@ -515,7 +779,126 @@ struct MiniStatCard: View {
     }
 }
 
-// MARK: - 8. Empty State
+// MARK: - 9. Dashboard Analytics Components
+
+struct DashboardSectionCard<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .foregroundColor(EconomofarUI.textSecondary)
+                .textCase(.uppercase)
+                .tracking(0.5)
+                .padding(.horizontal, 4)
+
+            VStack(spacing: 0) {
+                content
+            }
+            .background(EconomofarUI.card)
+            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(EconomofarUI.border, lineWidth: 1)
+            }
+            .shadow(color: Color.black.opacity(0.035), radius: 14, x: 0, y: 8)
+        }
+    }
+}
+
+struct DashboardInsightRow: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+    let value: String
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 14) {
+            DashboardIconBox(icon: icon, tint: tint)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .foregroundColor(EconomofarUI.textPrimary)
+
+                Text(subtitle)
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundColor(EconomofarUI.textSecondary)
+                    .lineLimit(2)
+            }
+
+            Spacer()
+
+            Text(value)
+                .font(.system(size: 14, weight: .bold, design: .rounded))
+                .foregroundColor(tint)
+                .multilineTextAlignment(.trailing)
+                .lineLimit(2)
+                .minimumScaleFactor(0.75)
+        }
+        .padding(16)
+    }
+}
+
+struct DashboardIconBox: View {
+    let icon: String
+    let tint: Color
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .fill(tint.opacity(0.11))
+                .frame(width: 46, height: 46)
+
+            Image(systemName: icon)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundColor(tint)
+        }
+    }
+}
+
+struct DashboardDivider: View {
+    var body: some View {
+        Divider()
+            .background(EconomofarUI.border)
+            .padding(.leading, 76)
+    }
+}
+
+struct DashboardInfoBanner: View {
+    let icon: String
+    let message: String
+    let tint: Color
+    let background: Color
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(tint)
+
+            Text(message)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundColor(tint)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer()
+        }
+        .padding(14)
+        .background(background)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(tint.opacity(0.14), lineWidth: 1)
+        }
+        .padding(.horizontal, 20)
+    }
+}
+
+// MARK: - 10. Empty State
 
 struct EmptyTicketsView: View {
     var body: some View {
@@ -555,7 +938,7 @@ struct EmptyTicketsView: View {
     }
 }
 
-// MARK: - 9. Ticket Row
+// MARK: - 11. Ticket Row
 
 struct TicketRow: View {
     let ticket: Ticket
@@ -623,7 +1006,7 @@ struct TicketRow: View {
     }
 }
 
-// MARK: - 10. Result View
+// MARK: - 12. Result View
 
 struct ResultView: View {
     @EnvironmentObject var sessionManager: SessionManager
@@ -632,6 +1015,7 @@ struct ResultView: View {
     var image: UIImage?
     var resultText: String
     @Binding var isPresented: Bool
+    var onSaved: (() -> Void)? = nil
 
     @State private var merchantName: String = ""
     @State private var totalAmount: Double = 0.0
@@ -812,6 +1196,8 @@ struct ResultView: View {
                     rawOcr: resultText,
                     token: token
                 )
+
+                onSaved?()
                 isPresented = false
             }
         } label: {
@@ -915,7 +1301,7 @@ struct ResultView: View {
     }
 }
 
-// MARK: - 11. Styled Text Field
+// MARK: - 13. Styled Text Field
 
 struct StyledTextField: View {
     let title: String
@@ -943,7 +1329,7 @@ struct StyledTextField: View {
     }
 }
 
-// MARK: - 12. Parsed Item Row
+// MARK: - 14. Parsed Item Row
 
 struct ParsedItemRow: View {
     let item: ParsedItem
@@ -987,7 +1373,7 @@ struct ParsedItemRow: View {
     }
 }
 
-// MARK: - 13. Loading Sheet View
+// MARK: - 15. Loading Sheet View
 
 struct LoadingSheetView: View {
     var body: some View {
@@ -1011,7 +1397,7 @@ struct LoadingSheetView: View {
     }
 }
 
-// MARK: - 14. Ticket Detail View
+// MARK: - 16. Ticket Detail View
 
 struct TicketDetailView: View {
     let ticket: Ticket
@@ -1185,7 +1571,7 @@ struct TicketDetailView: View {
     }
 }
 
-// MARK: - 15. Date Helper
+// MARK: - 17. Date Helper
 
 enum TicketDateHelper {
     static func shortDate(from dateString: String?) -> String {
@@ -1194,6 +1580,7 @@ enum TicketDateHelper {
         }
 
         let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "fr_FR")
         formatter.dateStyle = .short
         return formatter.string(from: date)
     }
@@ -1204,12 +1591,15 @@ enum TicketDateHelper {
         }
 
         let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "fr_FR")
         formatter.dateStyle = .medium
         return formatter.string(from: date)
     }
 
     private static func parseDate(_ dateString: String?) -> Date? {
-        guard let dateString else { return nil }
+        guard let dateString, !dateString.isEmpty else {
+            return nil
+        }
 
         let formatterWithFraction = ISO8601DateFormatter()
         formatterWithFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -1225,6 +1615,29 @@ enum TicketDateHelper {
             return date
         }
 
+        let localDateTimeFormatter = DateFormatter()
+        localDateTimeFormatter.locale = Locale(identifier: "en_US_POSIX")
+        localDateTimeFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+
+        if let date = localDateTimeFormatter.date(from: dateString) {
+            return date
+        }
+
+        let localDateFormatter = DateFormatter()
+        localDateFormatter.locale = Locale(identifier: "en_US_POSIX")
+        localDateFormatter.dateFormat = "yyyy-MM-dd"
+
+        if let date = localDateFormatter.date(from: dateString) {
+            return date
+        }
+
         return nil
     }
+}
+
+// MARK: - Preview
+
+#Preview {
+    DashboardView()
+        .environmentObject(SessionManager())
 }
