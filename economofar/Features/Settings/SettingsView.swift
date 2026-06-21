@@ -353,12 +353,12 @@ struct SettingsView: View {
     private var supportSection: some View {
         SettingsSectionCard(title: "Assistance") {
             NavigationLink {
-                HelpSupportPlaceholderView()
+                HelpSupportView()
             } label: {
                 SettingsNavigationRow(
                     icon: "questionmark.circle",
                     title: "Aide & Support",
-                    subtitle: "Obtenir de l’aide avec Economofar",
+                    subtitle: "FAQ, contact support, bugs et statut de l’application",
                     tint: SettingsDesign.accent
                 )
             }
@@ -681,44 +681,6 @@ private struct SettingsInfoBanner: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(tint.opacity(0.14), lineWidth: 1)
         }
-    }
-}
-
-// MARK: - Help Placeholder
-
-private struct HelpSupportPlaceholderView: View {
-    var body: some View {
-        ZStack {
-            SettingsDesign.background
-                .ignoresSafeArea()
-
-            VStack(spacing: 18) {
-                ZStack {
-                    Circle()
-                        .fill(SettingsDesign.accentSoft)
-                        .frame(width: 86, height: 86)
-
-                    Image(systemName: "questionmark.circle")
-                        .font(.system(size: 36, weight: .semibold))
-                        .foregroundColor(SettingsDesign.accent)
-                }
-
-                VStack(spacing: 8) {
-                    Text("Aide & Support")
-                        .font(.system(size: 22, weight: .bold, design: .rounded))
-                        .foregroundColor(SettingsDesign.textPrimary)
-
-                    Text("Cette page pourra contenir votre FAQ, contact support ou centre d’aide.")
-                        .font(.system(size: 14, weight: .medium, design: .rounded))
-                        .foregroundColor(SettingsDesign.textSecondary)
-                        .multilineTextAlignment(.center)
-                        .lineSpacing(3)
-                        .padding(.horizontal, 32)
-                }
-            }
-        }
-        .navigationTitle("Support")
-        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
