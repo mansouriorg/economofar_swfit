@@ -6,7 +6,7 @@ final class DashboardViewModel: ObservableObject {
 
     @Published var insights: DashboardInsightsResponse?
 
-    // Kept for compatibility with your old DashboardView if it still uses recentReceipts.
+    // Kept for compatibility with older DashboardView code if it still uses recentReceipts.
     @Published var recentReceipts: [Receipt] = []
 
     @Published var isLoading = false
@@ -18,12 +18,14 @@ final class DashboardViewModel: ObservableObject {
         self.dashboardService = dashboardService
     }
 
-    func loadDashboard() async {
+    // MARK: - Loading
+
+    func loadDashboard(token: String? = nil) async {
         isLoading = true
         errorMessage = nil
 
         do {
-            let loadedInsights = try await dashboardService.fetchDashboardInsights()
+            let loadedInsights = try await dashboardService.fetchDashboardInsights(token: token)
             insights = loadedInsights
             recentReceipts = mapRecentTicketsToReceipts(loadedInsights.recentTickets)
         } catch {
@@ -33,8 +35,8 @@ final class DashboardViewModel: ObservableObject {
         isLoading = false
     }
 
-    func refresh() async {
-        await loadDashboard()
+    func refresh(token: String? = nil) async {
+        await loadDashboard(token: token)
     }
 
     // MARK: - Compatibility with old code
@@ -57,39 +59,10 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Formatting
+    // MARK: - Smart Cards
 
-    func amountText(_ value: Double?) -> String {
-        guard let value else {
-            return "0,00 €"
-        }
-
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = "EUR"
-        formatter.locale = Locale(identifier: "fr_FR")
-        formatter.maximumFractionDigits = 2
-        formatter.minimumFractionDigits = 2
-
-        return formatter.string(from: NSNumber(value: value)) ?? String(format: "%.2f €", value)
-    }
-
-    func simpleAmountText(_ value: Double?) -> String {
-        guard let value else {
-            return "0,00"
-        }
-
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        formatter.locale = Locale(identifier: "fr_FR")
-        formatter.maximumFractionDigits = 2
-        formatter.minimumFractionDigits = 2
-
-        return formatter.string(from: NSNumber(value: value)) ?? String(format: "%.2f", value)
-    }
-
-    var totalScannedAmountText: String {
-        amountText(insights?.totalScannedAmount)
+    var monthlyTotalText: String {
+        amountText(insights?.totalSpentThisMonth)
     }
 
     var ticketCountText: String {
@@ -98,6 +71,105 @@ final class DashboardViewModel: ObservableObject {
 
     var averageBasketText: String {
         amountText(insights?.averageBasket)
+    }
+
+    var topMerchantText: String {
+        guard let merchant = insights?.mostFrequentMerchant, !merchant.isEmpty else {
+            return "Indisponible"
+        }
+
+        return merchant
+    }
+
+    var budgetRemainingText: String {
+        guard let insights else {
+            return "0,00 €"
+        }
+
+        guard let monthlyBudget = insights.monthlyBudget, monthlyBudget > 0 else {
+            return "Non défini"
+        }
+
+        return amountText(insights.budgetRemaining)
+    }
+
+    var budgetRemainingSubtitle: String {
+        guard let insights else {
+            return "Budget mensuel"
+        }
+
+        guard let monthlyBudget = insights.monthlyBudget, monthlyBudget > 0 else {
+            return "Ajoutez un budget"
+        }
+
+        if insights.budgetExceeded == true {
+            return "Budget dépassé"
+        }
+
+        return "Budget restant"
+    }
+
+    var isBudgetExceeded: Bool {
+        insights?.budgetExceeded == true
+    }
+
+    func lastScanStatusText(
+        isScanning: Bool,
+        isScanReady: Bool
+    ) -> String {
+        if isScanning {
+            return "Analyse en cours"
+        }
+
+        if isScanReady {
+            return "Analyse terminée"
+        }
+
+        guard let status = insights?.lastScanStatus else {
+            return "Prêt à scanner"
+        }
+
+        switch status {
+        case "COMPLETED":
+            return "Dernier scan OK"
+        case "READY_TO_SCAN":
+            return "Prêt à scanner"
+        default:
+            return "Prêt à scanner"
+        }
+    }
+
+    func lastScanSubtitle(
+        isScanning: Bool,
+        isScanReady: Bool
+    ) -> String {
+        if isScanning {
+            return "Traitement du ticket"
+        }
+
+        if isScanReady {
+            return "Touchez pour vérifier"
+        }
+
+        if let merchant = insights?.lastScanMerchant, !merchant.isEmpty {
+            if let amount = insights?.lastScanAmount {
+                return "\(merchant) • \(amountText(amount))"
+            }
+
+            return merchant
+        }
+
+        if let date = insights?.lastScanDate, !date.isEmpty {
+            return formattedDate(date)
+        }
+
+        return "Aucun scan récent"
+    }
+
+    // MARK: - Dashboard Texts
+
+    var totalScannedAmountText: String {
+        amountText(insights?.totalScannedAmount)
     }
 
     var totalSpentThisWeekText: String {
@@ -134,11 +206,7 @@ final class DashboardViewModel: ObservableObject {
     }
 
     var mostFrequentMerchantText: String {
-        guard let merchant = insights?.mostFrequentMerchant, !merchant.isEmpty else {
-            return "Indisponible"
-        }
-
-        return merchant
+        topMerchantText
     }
 
     var highestReceiptText: String {
@@ -153,24 +221,85 @@ final class DashboardViewModel: ObservableObject {
         return amountText(insights.highestReceiptAmount)
     }
 
+    // MARK: - Formatting
+
+    func amountText(_ value: Double?) -> String {
+        guard let value else {
+            return "0,00 €"
+        }
+
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = "EUR"
+        formatter.locale = Locale(identifier: "fr_FR")
+        formatter.maximumFractionDigits = 2
+        formatter.minimumFractionDigits = 2
+
+        return formatter.string(from: NSNumber(value: value)) ?? String(format: "%.2f €", value)
+    }
+
+    func simpleAmountText(_ value: Double?) -> String {
+        guard let value else {
+            return "0,00"
+        }
+
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.locale = Locale(identifier: "fr_FR")
+        formatter.maximumFractionDigits = 2
+        formatter.minimumFractionDigits = 2
+
+        return formatter.string(from: NSNumber(value: value)) ?? String(format: "%.2f", value)
+    }
+
     func formattedDate(_ value: String?) -> String {
         guard let value, !value.isEmpty else {
             return ""
         }
 
-        let parser = DateFormatter()
-        parser.locale = Locale(identifier: "en_US_POSIX")
-        parser.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+        if let date = parseDate(value) {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "fr_FR")
+            formatter.dateStyle = .medium
+            formatter.timeStyle = .none
 
-        guard let date = parser.date(from: value) else {
-            return value
+            return formatter.string(from: date)
         }
 
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "fr_FR")
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .none
+        return value
+    }
 
-        return formatter.string(from: date)
+    private func parseDate(_ value: String) -> Date? {
+        let isoFormatterWithFraction = ISO8601DateFormatter()
+        isoFormatterWithFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        if let date = isoFormatterWithFraction.date(from: value) {
+            return date
+        }
+
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime]
+
+        if let date = isoFormatter.date(from: value) {
+            return date
+        }
+
+        let localDateTimeFormatter = DateFormatter()
+        localDateTimeFormatter.locale = Locale(identifier: "en_US_POSIX")
+        localDateTimeFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+
+        if let date = localDateTimeFormatter.date(from: value) {
+            return date
+        }
+
+        let localDateFormatter = DateFormatter()
+        localDateFormatter.locale = Locale(identifier: "en_US_POSIX")
+        localDateFormatter.dateFormat = "yyyy-MM-dd"
+
+        if let date = localDateFormatter.date(from: value) {
+            return date
+        }
+
+        return nil
     }
 }

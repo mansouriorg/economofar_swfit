@@ -16,6 +16,17 @@ struct DashboardInsightsResponse: Codable {
     let averageTicketAmount: Double
     let mostFrequentMerchant: String?
 
+    // MARK: - Smart Cards
+
+    let monthlyBudget: Double?
+    let budgetRemaining: Double?
+    let budgetExceeded: Bool?
+
+    let lastScanStatus: String?
+    let lastScanMerchant: String?
+    let lastScanAmount: Double?
+    let lastScanDate: String?
+
     let recentTickets: [DashboardRecentTicketResponse]
 }
 
