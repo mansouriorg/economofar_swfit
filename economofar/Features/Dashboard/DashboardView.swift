@@ -494,6 +494,24 @@ struct DashboardView: View {
 
                 Spacer()
 
+                NavigationLink {
+                    AdvancedHistoryView()
+                        .environmentObject(sessionManager)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "line.3.horizontal.decrease.circle")
+                            .font(.system(size: 13, weight: .semibold))
+
+                        Text("Filtres")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                    }
+                    .foregroundColor(EconomofarUI.accent)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 10)
+                    .background(EconomofarUI.accentSoft)
+                    .clipShape(Capsule())
+                }
+
                 if ticketService.isLoading {
                     ProgressView()
                         .tint(EconomofarUI.accent)
