@@ -84,8 +84,10 @@ struct HistoryView: View {
     private var receiptsSection: some View {
         LazyVStack(spacing: 12) {
             ForEach(viewModel.filteredReceipts) { receipt in
-                NavigationLink(destination: ReceiptDetailView(receipt: receipt)) {
-                    HistoryReceiptRow(receipt: receipt)
+                NavigationLink {
+                    ReceiptDetailView(receiptId: receipt.id)
+                } label: {
+                    BasicHistoryReceiptRow(receipt: receipt)
                 }
                 .buttonStyle(.plain)
             }
@@ -200,7 +202,7 @@ private struct HistorySummaryCard: View {
 
 // MARK: - Receipt Row
 
-private struct HistoryReceiptRow: View {
+private struct BasicHistoryReceiptRow: View {
     let receipt: Receipt
 
     private var merchantName: String {
@@ -289,12 +291,16 @@ private struct HistoryEmptyState: View {
                     .font(.system(size: 19, weight: .bold, design: .rounded))
                     .foregroundColor(HistoryDesign.textPrimary)
 
-                Text(isSearching ? "Essayez avec un autre magasin, une date ou un montant." : "Vos tickets scannés apparaîtront ici automatiquement.")
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
-                    .foregroundColor(HistoryDesign.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .lineSpacing(3)
-                    .padding(.horizontal, 22)
+                Text(
+                    isSearching
+                    ? "Essayez avec un autre magasin, une date ou un montant."
+                    : "Vos tickets scannés apparaîtront ici automatiquement."
+                )
+                .font(.system(size: 14, weight: .medium, design: .rounded))
+                .foregroundColor(HistoryDesign.textSecondary)
+                .multilineTextAlignment(.center)
+                .lineSpacing(3)
+                .padding(.horizontal, 22)
             }
         }
         .frame(maxWidth: .infinity)
