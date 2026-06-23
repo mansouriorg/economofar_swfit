@@ -11,9 +11,12 @@ struct TicketHistoryReceipt: Codable, Identifiable, Hashable {
     let paymentMethod: String?
     let scanStatus: TicketScanStatus?
     let imageUrl: String?
+    let rawOcrText: String?
+    let items: [EditableTicketItemResponse]?
 
     var displayMerchant: String {
-        guard let merchantName, !merchantName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard let merchantName,
+              !merchantName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return "Magasin inconnu"
         }
 
@@ -25,7 +28,8 @@ struct TicketHistoryReceipt: Codable, Identifiable, Hashable {
     }
 
     var displayCategory: String {
-        guard let category, !category.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard let category,
+              !category.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return "Autre"
         }
 
@@ -33,7 +37,8 @@ struct TicketHistoryReceipt: Codable, Identifiable, Hashable {
     }
 
     var displayPaymentMethod: String {
-        guard let paymentMethod, !paymentMethod.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard let paymentMethod,
+              !paymentMethod.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return "Non précisé"
         }
 
@@ -46,6 +51,22 @@ struct TicketHistoryReceipt: Codable, Identifiable, Hashable {
 
     var displayMonth: String {
         TicketHistoryDateHelper.monthTitle(from: purchaseDate)
+    }
+
+    var safeItems: [EditableTicketItemResponse] {
+        items ?? []
+    }
+
+    var displayItemsPreview: String {
+        let names = safeItems
+            .map { $0.displayName }
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+        if names.isEmpty {
+            return "Aucun article"
+        }
+
+        return names.prefix(3).joined(separator: ", ")
     }
 }
 
@@ -63,7 +84,8 @@ struct TicketHistoryGroup: Codable, Identifiable, Hashable {
     }
 
     var displayTitle: String {
-        guard let groupTitle, !groupTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard let groupTitle,
+              !groupTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return "Groupe"
         }
 
@@ -84,9 +106,71 @@ struct TicketHistoryGroup: Codable, Identifiable, Hashable {
     }
 }
 
+// MARK: - Monthly Report Response
+
+struct TicketMonthlyReport: Codable, Hashable {
+    let month: String?
+    let monthTitle: String?
+    let receiptCount: Int?
+    let totalAmount: Double?
+    let averageAmount: Double?
+    let topMerchant: String?
+    let highestReceiptAmount: Double?
+    let tickets: [TicketHistoryReceipt]?
+
+    var displayMonthTitle: String {
+        guard let monthTitle,
+              !monthTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return month ?? "Mois"
+        }
+
+        return monthTitle
+    }
+
+    var displayReceiptCount: String {
+        let count = receiptCount ?? tickets?.count ?? 0
+        return "\(count) ticket\(count > 1 ? "s" : "")"
+    }
+
+    var displayTotalAmount: String {
+        String(format: "%.2f €", totalAmount ?? 0.0)
+    }
+
+    var displayAverageAmount: String {
+        String(format: "%.2f €", averageAmount ?? 0.0)
+    }
+
+    var displayHighestReceiptAmount: String {
+        String(format: "%.2f €", highestReceiptAmount ?? 0.0)
+    }
+
+    var displayTopMerchant: String {
+        guard let topMerchant,
+              !topMerchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "Non disponible"
+        }
+
+        return topMerchant
+    }
+
+    var safeTickets: [TicketHistoryReceipt] {
+        tickets ?? []
+    }
+}
+
+// MARK: - Exported File
+
+struct ExportedHistoryFile: Identifiable {
+    let id = UUID()
+    let url: URL
+    let title: String
+}
+
 // MARK: - Filter Model
 
 struct TicketHistoryFilter: Equatable {
+    var search: String = ""
+
     var fromDate: String = ""
     var toDate: String = ""
     var merchant: String = ""
@@ -102,6 +186,7 @@ struct TicketHistoryFilter: Equatable {
     var queryItems: [URLQueryItem] {
         var items: [URLQueryItem] = []
 
+        addQueryItem(&items, name: "search", value: search)
         addQueryItem(&items, name: "fromDate", value: fromDate)
         addQueryItem(&items, name: "toDate", value: toDate)
         addQueryItem(&items, name: "merchant", value: merchant)
@@ -133,6 +218,7 @@ struct TicketHistoryFilter: Equatable {
     }
 
     var hasActiveFilters: Bool {
+        !search.isEmpty ||
         !fromDate.isEmpty ||
         !toDate.isEmpty ||
         !merchant.isEmpty ||
@@ -143,6 +229,16 @@ struct TicketHistoryFilter: Equatable {
         !month.isEmpty ||
         scanStatus != "Tous" ||
         sortBy != .newestFirst
+    }
+
+    var resolvedMonthForExport: String {
+        let trimmedMonth = month.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if TicketHistoryDateHelper.isValidMonth(trimmedMonth) {
+            return trimmedMonth
+        }
+
+        return TicketHistoryDateHelper.currentMonthString()
     }
 
     private func addQueryItem(_ items: inout [URLQueryItem], name: String, value: String) {
@@ -379,5 +475,28 @@ enum TicketHistoryDateHelper {
         }
 
         return nil
+    }
+
+    static func currentMonthString() -> String {
+        let components = Calendar.current.dateComponents([.year, .month], from: Date())
+
+        let year = components.year ?? 2026
+        let month = components.month ?? 1
+
+        return String(format: "%04d-%02d", year, month)
+    }
+
+    static func isValidMonth(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard trimmed.count == 7 else {
+            return false
+        }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM"
+
+        return formatter.date(from: trimmed) != nil
     }
 }

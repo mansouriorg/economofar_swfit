@@ -11,9 +11,15 @@ struct AdvancedHistoryView: View {
     @State private var receipts: [TicketHistoryReceipt] = []
     @State private var groups: [TicketHistoryGroup] = []
 
+    @State private var monthlyReport: TicketMonthlyReport? = nil
+
     @State private var isLoading = false
+    @State private var isExporting = false
     @State private var errorMessage: String? = nil
+    @State private var successMessage: String? = nil
+
     @State private var showFilters = false
+    @State private var exportedFile: ExportedHistoryFile? = nil
 
     private let service = TicketHistoryService.shared
 
@@ -44,6 +50,16 @@ struct AdvancedHistoryView: View {
                     .padding(.top, 12)
                 }
 
+                if let successMessage {
+                    DashboardInfoBanner(
+                        icon: "checkmark.circle.fill",
+                        message: successMessage,
+                        tint: EconomofarUI.success,
+                        background: EconomofarUI.successSoft
+                    )
+                    .padding(.top, 12)
+                }
+
                 if isLoading && !hasResults {
                     loadingView
                 } else if !hasResults {
@@ -57,22 +73,7 @@ struct AdvancedHistoryView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button {
-                    showFilters = true
-                } label: {
-                    ZStack(alignment: .topTrailing) {
-                        Image(systemName: "line.3.horizontal.decrease.circle")
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundColor(EconomofarUI.accent)
-
-                        if filter.hasActiveFilters {
-                            Circle()
-                                .fill(EconomofarUI.danger)
-                                .frame(width: 8, height: 8)
-                                .offset(x: 3, y: -3)
-                        }
-                    }
-                }
+                headerToolbar
             }
         }
         .sheet(isPresented: $showFilters) {
@@ -83,11 +84,13 @@ struct AdvancedHistoryView: View {
                     showFilters = false
                     Task {
                         await loadHistory()
+                        await loadMonthlyReportIfNeeded()
                     }
                 },
                 onReset: {
                     filter = TicketHistoryFilter()
                     viewMode = .grouped
+                    monthlyReport = nil
                     showFilters = false
 
                     Task {
@@ -98,26 +101,117 @@ struct AdvancedHistoryView: View {
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
         }
+        .sheet(item: $exportedFile) { exportedFile in
+            ExportShareSheet(file: exportedFile)
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
+        }
         .task {
             await loadHistory()
+            await loadMonthlyReportIfNeeded()
         }
         .refreshable {
             await loadHistory()
+            await loadMonthlyReportIfNeeded()
         }
+    }
+
+    // MARK: - Header Toolbar
+
+    private var headerToolbar: some View {
+        HStack(spacing: 14) {
+            Button {
+                showFilters = true
+            } label: {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: "line.3.horizontal.decrease.circle")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundColor(EconomofarUI.accent)
+
+                    if filter.hasActiveFilters {
+                        Circle()
+                            .fill(EconomofarUI.danger)
+                            .frame(width: 8, height: 8)
+                            .offset(x: 3, y: -3)
+                    }
+                }
+            }
+
+            exportMenu
+        }
+    }
+
+    private var exportMenu: some View {
+        Menu {
+            Button {
+                Task {
+                    await exportCurrentCsv()
+                }
+            } label: {
+                Label("Exporter CSV", systemImage: "tablecells")
+            }
+
+            Button {
+                Task {
+                    await exportCurrentPdf()
+                }
+            } label: {
+                Label("Exporter PDF", systemImage: "doc.richtext")
+            }
+
+            Divider()
+
+            Button {
+                Task {
+                    await exportMonthlyCsv()
+                }
+            } label: {
+                Label("CSV mensuel", systemImage: "calendar.badge.down")
+            }
+
+            Button {
+                Task {
+                    await exportMonthlyPdf()
+                }
+            } label: {
+                Label("PDF mensuel", systemImage: "calendar")
+            }
+
+            Divider()
+
+            Button {
+                Task {
+                    await loadMonthlyReport()
+                }
+            } label: {
+                Label("Résumé mensuel", systemImage: "chart.bar.doc.horizontal")
+            }
+
+        } label: {
+            if isExporting {
+                ProgressView()
+                    .tint(EconomofarUI.accent)
+            } else {
+                Image(systemName: "square.and.arrow.down")
+                    .font(.system(size: 19, weight: .semibold))
+                    .foregroundColor(EconomofarUI.accent)
+            }
+        }
+        .disabled(isExporting)
     }
 
     // MARK: - Header
 
     private var headerSection: some View {
         VStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 14) {
                 HStack {
                     VStack(alignment: .leading, spacing: 5) {
                         Text("Historique avancé")
                             .font(.system(size: 28, weight: .bold, design: .rounded))
                             .foregroundColor(EconomofarUI.textPrimary)
 
-                        Text("Filtrez, triez et regroupez vos reçus.")
+                        Text("Recherchez par produit, OCR, marchand, date ou catégorie.")
                             .font(.system(size: 14, weight: .medium, design: .rounded))
                             .foregroundColor(EconomofarUI.textSecondary)
                     }
@@ -150,20 +244,24 @@ struct AdvancedHistoryView: View {
                     .stroke(EconomofarUI.border, lineWidth: 1)
             }
 
-            quickSearchBar
+            globalSearchBar
+
+            if let monthlyReport {
+                MonthlyReportCard(report: monthlyReport)
+            }
         }
         .padding(.horizontal, 20)
         .padding(.top, 14)
         .padding(.bottom, 12)
     }
 
-    private var quickSearchBar: some View {
+    private var globalSearchBar: some View {
         HStack(spacing: 12) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(EconomofarUI.textSecondary)
 
-            TextField("Rechercher un marchand...", text: $filter.merchant)
+            TextField("Rechercher : milk, Carrefour, Santé, 2026-06...", text: $filter.search)
                 .font(.system(size: 15, weight: .medium, design: .rounded))
                 .foregroundColor(EconomofarUI.textPrimary)
                 .submitLabel(.search)
@@ -173,9 +271,10 @@ struct AdvancedHistoryView: View {
                     }
                 }
 
-            if !filter.merchant.isEmpty {
+            if !filter.search.isEmpty {
                 Button {
-                    filter.merchant = ""
+                    filter.search = ""
+
                     Task {
                         await loadHistory()
                     }
@@ -297,7 +396,7 @@ struct AdvancedHistoryView: View {
                     .font(.system(size: 20, weight: .bold, design: .rounded))
                     .foregroundColor(EconomofarUI.textPrimary)
 
-                Text("Essayez de modifier vos filtres ou de scanner un nouveau ticket.")
+                Text("Essayez de modifier vos filtres ou de chercher un produit comme milk, café, pain...")
                     .font(.system(size: 14, weight: .medium, design: .rounded))
                     .foregroundColor(EconomofarUI.textSecondary)
                     .multilineTextAlignment(.center)
@@ -307,6 +406,8 @@ struct AdvancedHistoryView: View {
             if filter.hasActiveFilters {
                 Button {
                     filter = TicketHistoryFilter()
+                    monthlyReport = nil
+
                     Task {
                         await loadHistory()
                     }
@@ -336,6 +437,7 @@ struct AdvancedHistoryView: View {
 
         isLoading = true
         errorMessage = nil
+        successMessage = nil
 
         do {
             switch viewMode {
@@ -358,6 +460,317 @@ struct AdvancedHistoryView: View {
 
         isLoading = false
     }
+
+    private func loadMonthlyReportIfNeeded() async {
+        let month = filter.month.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard TicketHistoryDateHelper.isValidMonth(month) else {
+            return
+        }
+
+        await loadMonthlyReport(month: month)
+    }
+
+    private func loadMonthlyReport() async {
+        await loadMonthlyReport(month: filter.resolvedMonthForExport)
+    }
+
+    private func loadMonthlyReport(month: String) async {
+        guard let token = sessionManager.token else {
+            errorMessage = "Session expirée. Veuillez vous reconnecter."
+            return
+        }
+
+        errorMessage = nil
+        successMessage = nil
+
+        do {
+            monthlyReport = try await service.monthlyReport(
+                month: month,
+                token: token
+            )
+
+            successMessage = "Résumé mensuel chargé pour \(month)."
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    // MARK: - Export
+
+    private func exportCurrentCsv() async {
+        guard let token = sessionManager.token else {
+            errorMessage = "Session expirée. Veuillez vous reconnecter."
+            return
+        }
+
+        isExporting = true
+        errorMessage = nil
+        successMessage = nil
+
+        do {
+            let url = try await service.exportCsv(
+                filter: filter,
+                token: token
+            )
+
+            exportedFile = ExportedHistoryFile(
+                url: url,
+                title: "Export CSV"
+            )
+
+            successMessage = "Export CSV généré."
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+
+        isExporting = false
+    }
+
+    private func exportCurrentPdf() async {
+        guard let token = sessionManager.token else {
+            errorMessage = "Session expirée. Veuillez vous reconnecter."
+            return
+        }
+
+        isExporting = true
+        errorMessage = nil
+        successMessage = nil
+
+        do {
+            let url = try await service.exportPdf(
+                filter: filter,
+                token: token
+            )
+
+            exportedFile = ExportedHistoryFile(
+                url: url,
+                title: "Export PDF"
+            )
+
+            successMessage = "Export PDF généré."
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+
+        isExporting = false
+    }
+
+    private func exportMonthlyCsv() async {
+        guard let token = sessionManager.token else {
+            errorMessage = "Session expirée. Veuillez vous reconnecter."
+            return
+        }
+
+        let month = filter.resolvedMonthForExport
+
+        isExporting = true
+        errorMessage = nil
+        successMessage = nil
+
+        do {
+            let url = try await service.exportMonthlyCsv(
+                month: month,
+                token: token
+            )
+
+            exportedFile = ExportedHistoryFile(
+                url: url,
+                title: "Export CSV mensuel"
+            )
+
+            successMessage = "Export CSV mensuel généré pour \(month)."
+
+            monthlyReport = try? await service.monthlyReport(
+                month: month,
+                token: token
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+
+        isExporting = false
+    }
+
+    private func exportMonthlyPdf() async {
+        guard let token = sessionManager.token else {
+            errorMessage = "Session expirée. Veuillez vous reconnecter."
+            return
+        }
+
+        let month = filter.resolvedMonthForExport
+
+        isExporting = true
+        errorMessage = nil
+        successMessage = nil
+
+        do {
+            let url = try await service.exportMonthlyPdf(
+                month: month,
+                token: token
+            )
+
+            exportedFile = ExportedHistoryFile(
+                url: url,
+                title: "Export PDF mensuel"
+            )
+
+            successMessage = "Export PDF mensuel généré pour \(month)."
+
+            monthlyReport = try? await service.monthlyReport(
+                month: month,
+                token: token
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+
+        isExporting = false
+    }
+}
+
+// MARK: - Monthly Report Card
+
+struct MonthlyReportCard: View {
+    let report: TicketMonthlyReport
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                DashboardIconBox(
+                    icon: "calendar",
+                    tint: EconomofarUI.success
+                )
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(report.displayMonthTitle)
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                        .foregroundColor(EconomofarUI.textPrimary)
+
+                    Text(report.displayReceiptCount)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundColor(EconomofarUI.textSecondary)
+                }
+
+                Spacer()
+
+                Text(report.displayTotalAmount)
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .foregroundColor(EconomofarUI.success)
+            }
+
+            HStack(spacing: 10) {
+                MonthlyReportMetric(
+                    title: "Moyenne",
+                    value: report.displayAverageAmount,
+                    icon: "chart.bar"
+                )
+
+                MonthlyReportMetric(
+                    title: "Top marchand",
+                    value: report.displayTopMerchant,
+                    icon: "storefront"
+                )
+
+                MonthlyReportMetric(
+                    title: "Plus élevé",
+                    value: report.displayHighestReceiptAmount,
+                    icon: "crown"
+                )
+            }
+        }
+        .padding(16)
+        .background(EconomofarUI.card)
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(EconomofarUI.border, lineWidth: 1)
+        }
+    }
+}
+
+struct MonthlyReportMetric: View {
+    let title: String
+    let value: String
+    let icon: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(EconomofarUI.accent)
+
+            Text(value)
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .foregroundColor(EconomofarUI.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+
+            Text(title)
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .foregroundColor(EconomofarUI.textSecondary)
+                .textCase(.uppercase)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(EconomofarUI.cardSoft)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+// MARK: - Export Share Sheet
+
+struct ExportShareSheet: View {
+    let file: ExportedHistoryFile
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 24) {
+                ZStack {
+                    Circle()
+                        .fill(EconomofarUI.accentSoft)
+                        .frame(width: 86, height: 86)
+
+                    Image(systemName: "doc.fill")
+                        .font(.system(size: 34, weight: .semibold))
+                        .foregroundColor(EconomofarUI.accent)
+                }
+
+                VStack(spacing: 8) {
+                    Text(file.title)
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                        .foregroundColor(EconomofarUI.textPrimary)
+
+                    Text(file.url.lastPathComponent)
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundColor(EconomofarUI.textSecondary)
+                        .multilineTextAlignment(.center)
+                }
+
+                ShareLink(item: file.url) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 17, weight: .semibold))
+
+                        Text("Partager le fichier")
+                            .font(.system(size: 16, weight: .bold, design: .rounded))
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .background(EconomofarUI.mainGradient)
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                }
+                .padding(.horizontal, 24)
+
+                Spacer()
+            }
+            .padding(.top, 34)
+            .background(EconomofarUI.background)
+            .navigationTitle("Export prêt")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
 }
 
 // MARK: - Filters Sheet
@@ -377,6 +790,15 @@ struct HistoryFiltersSheet: View {
 
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 18) {
+                        sectionCard(title: "Recherche intelligente") {
+                            HistoryTextField(
+                                title: "Recherche globale",
+                                placeholder: "milk, pain, Carrefour, 2026-06...",
+                                icon: "magnifyingglass",
+                                text: $filter.search
+                            )
+                        }
+
                         sectionCard(title: "Affichage") {
                             VStack(spacing: 14) {
                                 Picker("Mode", selection: $viewMode) {
@@ -421,7 +843,7 @@ struct HistoryFiltersSheet: View {
                                 )
 
                                 HistoryTextField(
-                                    title: "Mois",
+                                    title: "Mois / rapport mensuel",
                                     placeholder: "YYYY-MM",
                                     icon: "calendar.circle",
                                     text: $filter.month
@@ -429,7 +851,7 @@ struct HistoryFiltersSheet: View {
                             }
                         }
 
-                        sectionCard(title: "Recherche") {
+                        sectionCard(title: "Filtres précis") {
                             VStack(spacing: 14) {
                                 HistoryTextField(
                                     title: "Marchand",
@@ -464,7 +886,7 @@ struct HistoryFiltersSheet: View {
                                     title: "Catégorie",
                                     icon: "tag",
                                     selection: $filter.category,
-                                    values: ["Tous"] + EconomofarCategories.all.filter { $0 != "Tous" }
+                                    values: ["Tous"] + EconomofarCategories.all
                                 )
 
                                 pickerRow(
@@ -673,6 +1095,13 @@ struct HistoryReceiptRow: View {
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundColor(EconomofarUI.textSecondary)
                 .lineLimit(1)
+
+                if !receipt.safeItems.isEmpty {
+                    Text(receipt.displayItemsPreview)
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundColor(EconomofarUI.textTertiary)
+                        .lineLimit(1)
+                }
 
                 HStack(spacing: 6) {
                     Text(receipt.displayPaymentMethod)

@@ -55,6 +55,107 @@ final class TicketHistoryService {
         )
     }
 
+    // MARK: - Monthly Report JSON
+
+    func monthlyReport(
+        month: String,
+        token: String
+    ) async throws -> TicketMonthlyReport {
+        let queryItems = [
+            URLQueryItem(name: "month", value: month)
+        ]
+
+        let request = try makeRequest(
+            path: "/export/monthly/report",
+            queryItems: queryItems,
+            method: "GET",
+            token: token
+        )
+
+        return try await perform(
+            request,
+            responseType: TicketMonthlyReport.self
+        )
+    }
+
+    // MARK: - Export CSV / PDF
+
+    func exportCsv(
+        filter: TicketHistoryFilter,
+        token: String
+    ) async throws -> URL {
+        let request = try makeRequest(
+            path: "/export/csv",
+            queryItems: filter.queryItems,
+            method: "GET",
+            token: token
+        )
+
+        return try await performFileDownload(
+            request,
+            filename: "economofar-history.csv"
+        )
+    }
+
+    func exportPdf(
+        filter: TicketHistoryFilter,
+        token: String
+    ) async throws -> URL {
+        let request = try makeRequest(
+            path: "/export/pdf",
+            queryItems: filter.queryItems,
+            method: "GET",
+            token: token
+        )
+
+        return try await performFileDownload(
+            request,
+            filename: "economofar-history.pdf"
+        )
+    }
+
+    func exportMonthlyCsv(
+        month: String,
+        token: String
+    ) async throws -> URL {
+        let queryItems = [
+            URLQueryItem(name: "month", value: month)
+        ]
+
+        let request = try makeRequest(
+            path: "/export/monthly/csv",
+            queryItems: queryItems,
+            method: "GET",
+            token: token
+        )
+
+        return try await performFileDownload(
+            request,
+            filename: "economofar-monthly-\(month).csv"
+        )
+    }
+
+    func exportMonthlyPdf(
+        month: String,
+        token: String
+    ) async throws -> URL {
+        let queryItems = [
+            URLQueryItem(name: "month", value: month)
+        ]
+
+        let request = try makeRequest(
+            path: "/export/monthly/pdf",
+            queryItems: queryItems,
+            method: "GET",
+            token: token
+        )
+
+        return try await performFileDownload(
+            request,
+            filename: "economofar-monthly-\(month).pdf"
+        )
+    }
+
     // MARK: - Helpers
 
     private func makeRequest(
@@ -120,6 +221,42 @@ final class TicketHistoryService {
         }
     }
 
+    private func performFileDownload(
+        _ request: URLRequest,
+        filename: String
+    ) async throws -> URL {
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw TicketHistoryServiceError.invalidResponse
+        }
+
+        print("📥 [TicketHistoryService] File download status: \(httpResponse.statusCode)")
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            let message = decodeBackendError(from: data)
+
+            throw TicketHistoryServiceError.backendError(
+                statusCode: httpResponse.statusCode,
+                message: message
+            )
+        }
+
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+        let fileURL = temporaryDirectory.appendingPathComponent(filename)
+
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+
+        do {
+            try data.write(to: fileURL, options: .atomic)
+            return fileURL
+        } catch {
+            throw TicketHistoryServiceError.fileSaveFailed(error.localizedDescription)
+        }
+    }
+
     private func decodeBackendError(from data: Data) -> String {
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             if let message = json["message"] as? String {
@@ -132,6 +269,10 @@ final class TicketHistoryService {
 
             if let detail = json["detail"] as? String {
                 return detail
+            }
+
+            if let path = json["path"] as? String {
+                return "Erreur serveur sur \(path)"
             }
         }
 
@@ -146,6 +287,7 @@ enum TicketHistoryServiceError: LocalizedError {
     case invalidResponse
     case backendError(statusCode: Int, message: String)
     case decodingFailed(String)
+    case fileSaveFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -160,6 +302,9 @@ enum TicketHistoryServiceError: LocalizedError {
 
         case .decodingFailed(let message):
             return "Erreur de lecture de l’historique: \(message)"
+
+        case .fileSaveFailed(let message):
+            return "Impossible d’enregistrer le fichier exporté: \(message)"
         }
     }
 }
