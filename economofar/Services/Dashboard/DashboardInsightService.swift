@@ -5,7 +5,7 @@ final class DashboardInsightService {
     static let shared = DashboardInsightService()
 
     // Simulator:
-    private let baseURL = "http://localhost:8080/api"
+    private var baseURL: String { AppConfig.baseURL + "/api" }
 
     // Real iPhone:
     // Replace localhost with your Mac IP, for example:
@@ -48,7 +48,7 @@ final class DashboardInsightService {
             return token
         }
 
-        if let savedToken = UserDefaults.standard.string(forKey: "jwt_token"),
+        if let savedToken = KeychainManager.loadToken(),
            !savedToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return savedToken
         }

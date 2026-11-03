@@ -9,7 +9,7 @@ final class SettingsViewModel: ObservableObject {
     @Published var notifications: [AppNotification] = []
 
     @Published var monthlyBudgetText: String = ""
-    @Published var currency: String = "EUR"
+    @Published var currency: String = AppFormat.currencyCode
 
     @Published var isLoadingPreferences = false
     @Published var isLoadingNotifications = false
@@ -91,9 +91,7 @@ final class SettingsViewModel: ObservableObject {
                 monthlyBudgetText = String(format: "%.2f", amount)
             }
 
-            if let budgetCurrency = budget?.currency, !budgetCurrency.isEmpty {
-                currency = budgetCurrency
-            }
+            currency = AppFormat.currencyCode
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -123,9 +121,7 @@ final class SettingsViewModel: ObservableObject {
                 monthlyBudgetText = String(format: "%.2f", amount)
             }
 
-            if let budgetCurrency = budget.currency {
-                currency = budgetCurrency
-            }
+            currency = AppFormat.currencyCode
 
             successMessage = "Budget mensuel enregistré."
         } catch {

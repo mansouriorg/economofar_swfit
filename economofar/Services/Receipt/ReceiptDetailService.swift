@@ -7,7 +7,7 @@ final class ReceiptDetailService {
     /**
      Simulator:
      */
-    private let baseURL = "http://localhost:8080/api/v1/receipts"
+    private var baseURL: String { AppConfig.baseURL + "/api/v1/receipts" }
 
     /**
      Real iPhone:

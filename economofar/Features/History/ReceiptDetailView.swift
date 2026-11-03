@@ -246,7 +246,7 @@ struct ReceiptDetailView: View {
             }
 
             if let url = imageURL(from: receipt?.imageUrl) {
-                AsyncImage(url: url) { phase in
+                AuthenticatedAsyncImage(url: url) { phase in
                     switch phase {
                     case .empty:
                         ZStack {
@@ -349,7 +349,7 @@ struct ReceiptDetailView: View {
                     ReceiptDetailTextField(
                         title: "Montant total",
                         placeholder: "0.00",
-                        icon: "eurosign.circle",
+                        icon: AppFormat.currencyIcon,
                         text: $totalAmount,
                         keyboardType: .decimalPad
                     )
@@ -603,7 +603,7 @@ struct ReceiptDetailView: View {
 
     private var displayTotalAmount: String {
         let amount = ReceiptDetailNumberHelper.double(from: totalAmount) ?? receipt?.totalAmount ?? 0.0
-        return String(format: "%.2f €", amount)
+        return AppFormat.money(amount)
     }
 
     // MARK: - Load
@@ -905,10 +905,10 @@ struct ReceiptDetailView: View {
         }
 
         if imageUrl.hasPrefix("/") {
-            return URL(string: "http://localhost:8080\(imageUrl)")
+            return URL(string: "\(AppConfig.baseURL)\(imageUrl)")
         }
 
-        return URL(string: "http://localhost:8080/\(imageUrl)")
+        return URL(string: "\(AppConfig.baseURL)/\(imageUrl)")
     }
 
     private func imagePlaceholder(
@@ -1034,7 +1034,7 @@ struct ReceiptItemEditorSheet: View {
                                     ReceiptDetailTextField(
                                         title: "Prix unit.",
                                         placeholder: "0.00",
-                                        icon: "eurosign.circle",
+                                        icon: AppFormat.currencyIcon,
                                         text: $item.unitPrice,
                                         keyboardType: .decimalPad
                                     )

@@ -111,6 +111,14 @@ struct ChangePasswordView: View {
                     field: .new
                 )
 
+                if viewModel.newPassword.isEmpty == false {
+                    NewPasswordChecklist(
+                        rules: newPasswordRules,
+                        pendingColor: ProfileDesign.textTertiary,
+                        textColor: ProfileDesign.textSecondary
+                    )
+                }
+
                 passwordField(
                     title: "Confirmer le mot de passe",
                     placeholder: "Répétez le nouveau mot de passe",
@@ -146,16 +154,24 @@ struct ChangePasswordView: View {
                     .shadow(color: ProfileDesign.danger.opacity(0.16), radius: 12, x: 0, y: 7)
                 }
                 .buttonStyle(.plain)
-                .disabled(viewModel.isSavingPassword)
+                .disabled(viewModel.isSavingPassword || newPasswordAcceptable == false)
             }
             .padding(16)
         }
     }
 
+    private var newPasswordRules: [NewPasswordRule] {
+        NewPasswordRules.evaluate(viewModel.newPassword).filter { $0.id != "email" }
+    }
+
+    private var newPasswordAcceptable: Bool {
+        newPasswordRules.allSatisfy { $0.isMet }
+    }
+
     private var passwordRulesCard: some View {
         ProfileSectionCard(title: "Conseils") {
             VStack(alignment: .leading, spacing: 10) {
-                ruleRow("Utilisez au moins 8 caractères.")
+                ruleRow("Utilisez au moins 8 caractères, avec une lettre et un chiffre.")
                 ruleRow("Évitez d’utiliser votre ancien mot de passe.")
                 ruleRow("Après changement, une reconnexion sera demandée.")
             }

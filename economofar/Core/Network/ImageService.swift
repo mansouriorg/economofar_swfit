@@ -11,7 +11,7 @@ class ImageService {
     // 2. L'adresse de ton serveur Java
     // Si Simulateur : localhost fonctionne généralement.
     // Si iPhone Réel : Mets l'IP de ton Mac (ex: http://192.168.1.15:8080...)
-    static let uploadURL = "http://localhost:8080/api/images/upload"
+    static var uploadURL: String { AppConfig.baseURL + "/api/images/upload" }
     
     static func uploadImage(image: UIImage) async throws -> ImageUploadResponse {
         // Vérification de l'URL

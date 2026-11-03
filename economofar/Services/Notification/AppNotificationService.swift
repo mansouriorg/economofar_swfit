@@ -4,7 +4,7 @@ final class AppNotificationService {
 
     static let shared = AppNotificationService()
 
-    private let baseURL = "http://localhost:8080/api"
+    private var baseURL: String { AppConfig.baseURL + "/api" }
 
     private init() {}
 
@@ -54,7 +54,7 @@ final class AppNotificationService {
         return try await performOptional(request, responseType: UserBudget.self)
     }
 
-    func updateBudget(monthlyAmount: Double, currency: String = "EUR") async throws -> UserBudget {
+    func updateBudget(monthlyAmount: Double, currency: String = AppFormat.currencyCode) async throws -> UserBudget {
         let request = try makeRequest(
             path: "/budget",
             method: "PUT",
@@ -75,7 +75,7 @@ final class AppNotificationService {
             throw AppNotificationServiceError.invalidURL
         }
 
-        guard let token = UserDefaults.standard.string(forKey: "jwt_token"), !token.isEmpty else {
+        guard let token = KeychainManager.loadToken(), !token.isEmpty else {
             throw AppNotificationServiceError.missingToken
         }
 

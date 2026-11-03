@@ -146,7 +146,7 @@ private struct HistorySummaryCard: View {
                         .font(.system(size: 14, weight: .medium, design: .rounded))
                         .foregroundColor(HistoryDesign.textSecondary)
 
-                    Text(String(format: "%.2f €", totalAmount))
+                    Text(AppFormat.money(totalAmount))
                         .font(.system(size: 34, weight: .bold, design: .rounded))
                         .foregroundColor(HistoryDesign.textPrimary)
                         .lineLimit(1)
@@ -237,7 +237,7 @@ private struct BasicHistoryReceiptRow: View {
             Spacer()
 
             VStack(alignment: .trailing, spacing: 6) {
-                Text(String(format: "%.2f €", amount))
+                Text(AppFormat.money(amount))
                     .font(.system(size: 16, weight: .bold, design: .rounded))
                     .foregroundColor(HistoryDesign.textPrimary)
 

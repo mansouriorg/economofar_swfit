@@ -7,7 +7,7 @@ struct SettingsView: View {
 
     @StateObject private var viewModel = SettingsViewModel()
 
-    @State private var faceIDEnabled = false
+    @AppStorage("faceid_lock_enabled") private var faceIDEnabled = false
     @State private var showLogoutConfirmation = false
 
     private var firstName: String {
@@ -69,10 +69,18 @@ struct SettingsView: View {
 
                         notificationsSection
                         budgetSection
-                        securitySection
-                        supportSection
-                        logoutSection
-                        footer
+                        Group {
+                            incomeSection
+                            savingsSection
+                            healthSection
+                        }
+                        warrantySection
+                        Group {
+                            securitySection
+                            supportSection
+                            logoutSection
+                            footer
+                        }
                     }
                     .padding(.horizontal, 20)
                     .padding(.top, 14)
@@ -263,6 +271,16 @@ struct SettingsView: View {
 
                 SettingsDivider()
 
+                VStack(spacing: 0) {
+                    SmartRemindersToggleRow()
+
+                    SettingsDivider()
+
+                    DailyRoutineRemindersRows()
+                }
+
+                SettingsDivider()
+
                 NavigationLink {
                     NotificationsView()
                 } label: {
@@ -352,6 +370,84 @@ struct SettingsView: View {
                 .disabled(viewModel.isSavingBudget)
             }
             .padding(16)
+
+            SettingsDivider()
+
+            NavigationLink {
+                CategoryBudgetsView()
+            } label: {
+                SettingsNavigationRow(
+                    icon: "chart.pie",
+                    title: "Budgets par catégorie",
+                    subtitle: "Définir un plafond pour chaque catégorie",
+                    tint: SettingsDesign.accent
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var warrantySection: some View {
+        SettingsSectionCard(title: "Garanties") {
+            NavigationLink {
+                WarrantiesView()
+            } label: {
+                SettingsNavigationRow(
+                    icon: "shield.lefthalf.filled",
+                    title: "Garanties des achats",
+                    subtitle: "Suivez la fin de garantie et recevez un rappel",
+                    tint: SettingsDesign.success
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var savingsSection: some View {
+        SettingsSectionCard(title: "Épargne") {
+            NavigationLink {
+                SavingsGoalsView()
+            } label: {
+                SettingsNavigationRow(
+                    icon: "flag.fill",
+                    title: "Objectifs d'épargne",
+                    subtitle: "Suivez vos projets et le rythme à tenir",
+                    tint: SettingsDesign.accent
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var incomeSection: some View {
+        SettingsSectionCard(title: "Revenus") {
+            NavigationLink {
+                IncomeView()
+            } label: {
+                SettingsNavigationRow(
+                    icon: "chart.bar.fill",
+                    title: "Revenus et bilan",
+                    subtitle: "Comparez vos revenus et vos dépenses mois par mois",
+                    tint: SettingsDesign.success
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var healthSection: some View {
+        SettingsSectionCard(title: "Santé financière") {
+            NavigationLink {
+                HealthScoreView()
+            } label: {
+                SettingsNavigationRow(
+                    icon: "waveform.path.ecg",
+                    title: "Score de santé financière",
+                    subtitle: "Une note sur 100 et des conseils pour progresser",
+                    tint: SettingsDesign.success
+                )
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -364,11 +460,39 @@ struct SettingsView: View {
                 tint: SettingsDesign.success,
                 isOn: $faceIDEnabled
             )
+
+            SettingsDivider()
+
+            NavigationLink {
+                AccountDataView()
+            } label: {
+                SettingsNavigationRow(
+                    icon: "person.crop.circle.badge.xmark",
+                    title: "Compte et données",
+                    subtitle: "Supprimer mon compte et mes données",
+                    tint: SettingsDesign.danger
+                )
+            }
+            .buttonStyle(.plain)
         }
     }
 
     private var supportSection: some View {
         SettingsSectionCard(title: "Assistance") {
+            NavigationLink {
+                ServerSettingsView()
+            } label: {
+                SettingsNavigationRow(
+                    icon: "server.rack",
+                    title: "Adresse du serveur",
+                    subtitle: "Connexion à l'API (nécessaire sur un vrai iPhone)",
+                    tint: SettingsDesign.warning
+                )
+            }
+            .buttonStyle(.plain)
+
+            SettingsDivider()
+
             NavigationLink {
                 HelpSupportView()
             } label: {

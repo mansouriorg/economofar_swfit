@@ -24,7 +24,7 @@ struct TicketHistoryReceipt: Codable, Identifiable, Hashable {
     }
 
     var displayAmount: String {
-        String(format: "%.2f €", totalAmount ?? 0.0)
+        AppFormat.money(totalAmount ?? 0.0)
     }
 
     var displayCategory: String {
@@ -98,7 +98,7 @@ struct TicketHistoryGroup: Codable, Identifiable, Hashable {
     }
 
     var displayTotal: String {
-        String(format: "%.2f €", totalAmount ?? 0.0)
+        AppFormat.money(totalAmount ?? 0.0)
     }
 
     var safeTickets: [TicketHistoryReceipt] {
@@ -133,15 +133,15 @@ struct TicketMonthlyReport: Codable, Hashable {
     }
 
     var displayTotalAmount: String {
-        String(format: "%.2f €", totalAmount ?? 0.0)
+        AppFormat.money(totalAmount ?? 0.0)
     }
 
     var displayAverageAmount: String {
-        String(format: "%.2f €", averageAmount ?? 0.0)
+        AppFormat.money(averageAmount ?? 0.0)
     }
 
     var displayHighestReceiptAmount: String {
-        String(format: "%.2f €", highestReceiptAmount ?? 0.0)
+        AppFormat.money(highestReceiptAmount ?? 0.0)
     }
 
     var displayTopMerchant: String {

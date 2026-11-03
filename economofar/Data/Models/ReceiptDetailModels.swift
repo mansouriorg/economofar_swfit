@@ -70,7 +70,7 @@ struct ReceiptDetailResponse: Codable, Identifiable, Hashable {
     }
 
     var displayAmount: String {
-        String(format: "%.2f €", totalAmount ?? 0.0)
+        AppFormat.money(totalAmount ?? 0.0)
     }
 
     var displayDate: String {
@@ -100,7 +100,7 @@ struct ReceiptDetailResponse: Codable, Identifiable, Hashable {
     }
 
     var displayVatAmount: String {
-        String(format: "%.2f €", vatAmount ?? 0.0)
+        AppFormat.money(vatAmount ?? 0.0)
     }
 
     var displayWarrantyDate: String {
@@ -175,11 +175,11 @@ struct ReceiptItemDetailResponse: Codable, Identifiable, Hashable {
     }
 
     var displayUnitPrice: String {
-        String(format: "%.2f €", unitPrice ?? 0.0)
+        AppFormat.money(unitPrice ?? 0.0)
     }
 
     var displayTotalPrice: String {
-        String(format: "%.2f €", totalPrice ?? 0.0)
+        AppFormat.money(totalPrice ?? 0.0)
     }
 
     var displayCategory: String {

@@ -59,7 +59,7 @@ struct LoginView: View {
         }
         .onChange(of: authService.isAuthenticated) { authenticated in
             if authenticated {
-                if let token = UserDefaults.standard.string(forKey: "jwt_token") {
+                if let token = KeychainManager.loadToken() {
                     sessionManager.setSession(token: token)
                 }
             }

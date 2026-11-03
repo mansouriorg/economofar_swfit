@@ -4,7 +4,7 @@ final class UserProfileService {
 
     static let shared = UserProfileService()
 
-    private let baseURL = "http://localhost:8080/api"
+    private var baseURL: String { AppConfig.baseURL + "/api" }
 
     private init() {}
 
@@ -45,7 +45,7 @@ final class UserProfileService {
             throw UserProfileServiceError.invalidURL
         }
 
-        guard let token = UserDefaults.standard.string(forKey: "jwt_token"), !token.isEmpty else {
+        guard let token = KeychainManager.loadToken(), !token.isEmpty else {
             throw UserProfileServiceError.missingToken
         }
 

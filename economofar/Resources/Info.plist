@@ -9,5 +9,9 @@
 	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Nous avons besoin de la caméra pour scanner vos tickets de caisse.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Economofar utilise Face ID pour verrouiller l'application.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Economofar se connecte a votre serveur local pour analyser vos tickets.</string>
 </dict>
 </plist>

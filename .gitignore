@@ -1,0 +1,14 @@
+
+# Added by the Economofar upgrade
+.upgrade-backup/
+
+# Added by the Economofar upgrade
+.DS_Store
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+.build/
+
+xcuserdata/
+.DS_Store

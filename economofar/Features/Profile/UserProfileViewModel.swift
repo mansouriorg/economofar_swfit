@@ -99,6 +99,14 @@ final class UserProfileViewModel: ObservableObject {
             profile = updatedProfile
             fillForm(with: updatedProfile)
 
+            if let currency = updatedProfile.preferredCurrency, !currency.isEmpty {
+                UserDefaults.standard.set(currency, forKey: AppStorageKeys.preferredCurrency)
+            }
+
+            if let language = updatedProfile.language, !language.isEmpty {
+                UserDefaults.standard.set(language, forKey: AppStorageKeys.preferredLanguage)
+            }
+
             if updatedProfile.requiresReLogin {
                 successMessage = "Profil mis à jour. Veuillez vous reconnecter."
                 shouldLogout = true

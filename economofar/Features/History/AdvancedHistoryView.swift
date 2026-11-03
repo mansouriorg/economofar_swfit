@@ -19,6 +19,7 @@ struct AdvancedHistoryView: View {
     @State private var successMessage: String? = nil
 
     @State private var showFilters = false
+    @State private var showManualEntry = false
     @State private var exportedFile: ExportedHistoryFile? = nil
 
     private let service = TicketHistoryService.shared
@@ -101,6 +102,15 @@ struct AdvancedHistoryView: View {
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
         }
+        .sheet(isPresented: $showManualEntry) {
+            ManualTicketView(onSaved: {
+                Task {
+                    await loadHistory()
+                    await loadMonthlyReportIfNeeded()
+                }
+            })
+            .environmentObject(sessionManager)
+        }
         .sheet(item: $exportedFile) { exportedFile in
             ExportShareSheet(file: exportedFile)
                 .presentationDetents([.medium])
@@ -120,6 +130,15 @@ struct AdvancedHistoryView: View {
 
     private var headerToolbar: some View {
         HStack(spacing: 14) {
+            Button {
+                showManualEntry = true
+            } label: {
+                Image(systemName: "plus.circle")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundColor(EconomofarUI.accent)
+            }
+            .accessibilityLabel("Saisie manuelle")
+
             Button {
                 showFilters = true
             } label: {
@@ -345,7 +364,7 @@ struct AdvancedHistoryView: View {
 
             Spacer()
 
-            Text(String(format: "%.2f €", total))
+            Text(AppFormat.money(total))
                 .font(.system(size: 17, weight: .bold, design: .rounded))
                 .foregroundColor(EconomofarUI.accent)
         }

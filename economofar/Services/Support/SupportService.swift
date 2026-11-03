@@ -5,7 +5,7 @@ final class SupportService {
 
     static let shared = SupportService()
 
-    private let baseURL = "http://localhost:8080/api"
+    private var baseURL: String { AppConfig.baseURL + "/api" }
 
     private init() {}
 
@@ -107,12 +107,12 @@ final class SupportService {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
         if requiresAuth {
-            guard let token = UserDefaults.standard.string(forKey: "jwt_token"), !token.isEmpty else {
+            guard let token = KeychainManager.loadToken(), !token.isEmpty else {
                 throw SupportServiceError.missingToken
             }
 
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        } else if let token = UserDefaults.standard.string(forKey: "jwt_token"), !token.isEmpty {
+        } else if let token = KeychainManager.loadToken(), !token.isEmpty {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 

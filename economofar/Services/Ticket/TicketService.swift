@@ -19,6 +19,7 @@ final class TicketService: ObservableObject {
      New scan status tracking.
      */
     @Published var activeTicketId: String? = nil
+    @Published var activeImageUrl: String? = nil
     @Published var scanStatus: TicketScanStatus = .idle
     @Published var scanStatusMessage: String? = nil
 
@@ -27,7 +28,7 @@ final class TicketService: ObservableObject {
     /**
      Simulator:
      */
-    private let baseURL = "http://localhost:8080/api/v1/tickets"
+    private var baseURL: String { AppConfig.baseURL + "/api/v1/tickets" }
 
     /**
      Real iPhone:
@@ -114,6 +115,7 @@ final class TicketService: ObservableObject {
         scanStatusMessage = nil
         scanStatus = .uploading
         activeTicketId = nil
+        activeImageUrl = nil
 
         let boundary = "Boundary-\(UUID().uuidString)"
 
@@ -140,6 +142,7 @@ final class TicketService: ObservableObject {
             )
 
             activeTicketId = uploadResponse.ticketId
+            activeImageUrl = uploadResponse.imageUrl
             scanStatus = uploadResponse.scanStatus ?? .needsReview
             scanStatusMessage = uploadResponse.message ?? uploadResponse.scanErrorMessage
 
@@ -277,6 +280,155 @@ final class TicketService: ObservableObject {
         }
 
         isLoading = false
+    }
+
+    // MARK: - 3.1 Save (awaitable) & discard
+
+    /// Saves the reviewed ticket and returns true only if the server confirmed it.
+    /// The ticket created by /upload is finalized (same id, same photo) instead of duplicated.
+    func saveValidatedTicketAndWait(
+        merchant: String,
+        amount: Double,
+        purchaseDate: String?,
+        category: String?,
+        paymentMethod: String?,
+        items: [EditableTicketItemRequest],
+        rawOcr: String,
+        token: String
+    ) async -> Bool {
+        guard let url = URL(string: "\(baseURL)/scan") else {
+            errorMessage = TicketServiceError.invalidURL.localizedDescription
+            return false
+        }
+
+        isLoading = true
+        errorMessage = nil
+
+        let cleanMerchant = merchant.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var payload = SaveValidatedTicketRequest(
+            merchantName: cleanMerchant.isEmpty ? "Commerçant inconnu" : cleanMerchant,
+            totalAmount: amount,
+            purchaseDate: purchaseDate ?? ISO8601DateFormatter().string(from: Date()),
+            category: category ?? "Alimentation",
+            imageUrl: activeImageUrl,
+            rawOcrText: rawOcr,
+            items: items
+        )
+
+        payload.ticketId = activeTicketId
+        payload.paymentMethod = paymentMethod
+
+        do {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            request.httpBody = try JSONEncoder().encode(payload)
+
+            _ = try await perform(request, responseType: Ticket.self)
+
+            scanStatus = .saved
+            scanStatusMessage = "Ticket sauvegardé"
+            lastScanResult = nil
+            activeTicketId = nil
+            activeImageUrl = nil
+            isLoading = false
+
+            await fetchTicketsAsync(token: token)
+
+            return true
+        } catch {
+            print("❌ [TicketService] Save error: \(error.localizedDescription)")
+            errorMessage = error.localizedDescription
+            isLoading = false
+            return false
+        }
+    }
+
+    /// Asks the server whether an identical receipt (same merchant, amount and day) is already saved.
+    /// Returns a readable message when a duplicate exists. If the check itself fails,
+    /// it returns nil so that saving is never blocked.
+    func findDuplicate(
+        merchant: String,
+        amount: Double,
+        purchaseDate: String?,
+        token: String
+    ) async -> String? {
+        guard var components = URLComponents(string: "\(baseURL)/duplicate-check") else {
+            return nil
+        }
+
+        var queryItems = [
+            URLQueryItem(name: "merchant", value: merchant),
+            URLQueryItem(name: "amount", value: String(format: "%.2f", amount))
+        ]
+
+        if let purchaseDate, !purchaseDate.isEmpty {
+            queryItems.append(URLQueryItem(name: "date", value: purchaseDate))
+        }
+
+        components.queryItems = queryItems
+        components.percentEncodedQuery = components.percentEncodedQuery?
+            .replacingOccurrences(of: "+", with: "%2B")
+
+        guard let url = components.url else {
+            return nil
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 8
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode),
+                  let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  (json["duplicate"] as? Bool) == true else {
+                return nil
+            }
+
+            let existingMerchant = (json["merchantName"] as? String) ?? merchant
+            let existingAmount = (json["totalAmount"] as? Double) ?? amount
+            let existingDay = (json["purchaseDate"] as? String).map { String($0.prefix(10)) } ?? ""
+
+            var message = "Un ticket identique est déjà enregistré : \(existingMerchant), \(AppFormat.money(existingAmount))"
+
+            if !existingDay.isEmpty {
+                message += ", le \(existingDay)"
+            }
+
+            return message + "."
+        } catch {
+            return nil
+        }
+    }
+
+    /// Cancels the current scan: removes the unfinished ticket (and its photo) from the server.
+    func discardActiveScan(token: String) async {
+        let ticketId = activeTicketId
+
+        activeTicketId = nil
+        activeImageUrl = nil
+        lastScanResult = nil
+        scanStatusMessage = nil
+        scanStatus = .idle
+        stopPollingScanStatus()
+
+        guard let ticketId,
+              let url = URL(string: AppConfig.baseURL + Endpoint.receipt(ticketId)) else {
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        _ = try? await URLSession.shared.data(for: request)
     }
 
     // MARK: - 4. Restore Active Scan
@@ -463,6 +615,10 @@ struct SaveValidatedTicketRequest: Codable {
     let imageUrl: String?
     let rawOcrText: String?
     let items: [EditableTicketItemRequest]
+
+    // Added by the upgrade: finalize the uploaded ticket + payment method
+    var ticketId: String? = nil
+    var paymentMethod: String? = nil
 }
 
 // MARK: - Data Extension

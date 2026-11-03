@@ -6,7 +6,7 @@ class AuthService: ObservableObject {
     
     // 👇 REMPLACE "localhost" PAR TON ADRESSE IP SI TU UTILISES UN VRAI IPHONE
     // Ex: "http://192.168.1.15:8080/api/auth"
-    static let baseURL = "http://localhost:8080/api/auth"
+    static var baseURL: String { AppConfig.baseURL + "/api/auth" }
     
     @Published var isAuthenticated = false
     @Published var isRegistered = false // ✅ NOUVEAU : Pour savoir si l'inscription a réussi
@@ -17,7 +17,7 @@ class AuthService: ObservableObject {
 
     init() {
         // Au démarrage, on vérifie si on a déjà un token
-        self.isAuthenticated = UserDefaults.standard.string(forKey: tokenKey) != nil
+        self.isAuthenticated = KeychainManager.loadToken() != nil
     }
 
     // --- Actions ---
@@ -46,7 +46,7 @@ class AuthService: ObservableObject {
     }
     
     func logout() {
-        UserDefaults.standard.removeObject(forKey: tokenKey)
+        KeychainManager.deleteToken()
         DispatchQueue.main.async {
             self.isAuthenticated = false
         }
@@ -97,7 +97,7 @@ class AuthService: ObservableObject {
                     }
                 } else {
                     // Échec
-                    self.errorMessage = "Échec (Code: \(httpResponse.statusCode))"
+                    self.errorMessage = AuthService.friendlyError(statusCode: httpResponse.statusCode, data: data)
                     
                     // Si le serveur renvoie un message d'erreur spécifique (comme "Email déjà pris")
                     if let data = data, let errorString = String(data: data, encoding: .utf8) {
@@ -109,14 +109,37 @@ class AuthService: ObservableObject {
         }.resume()
     }
     
+    /// Readable error for the login / register screens (reads the backend "message" field).
+    static func friendlyError(statusCode: Int, data: Data?) -> String {
+        if let data,
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let message = json["message"] as? String,
+           !message.isEmpty {
+            return message
+        }
+
+        switch statusCode {
+        case 401:
+            return "Email ou mot de passe incorrect."
+        case 409:
+            return "Un compte existe déjà avec cet email."
+        case 429:
+            return "Trop de tentatives. Réessayez dans quelques minutes."
+        case 500...599:
+            return "Le serveur ne répond pas correctement. Réessayez plus tard."
+        default:
+            return "Échec (Code: \(statusCode))"
+        }
+    }
+
     private func saveToken(_ token: String) {
-        UserDefaults.standard.set(token, forKey: tokenKey)
+        KeychainManager.saveToken(token)
         self.isAuthenticated = true
         self.errorMessage = ""
     }
     
     // Fonction utilitaire statique pour récupérer le token n'importe où dans l'app
     static func getToken() -> String? {
-        return UserDefaults.standard.string(forKey: "jwt_token")
+        return KeychainManager.loadToken()
     }
 }

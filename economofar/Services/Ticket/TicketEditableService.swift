@@ -4,7 +4,7 @@ final class TicketEditableService {
 
     static let shared = TicketEditableService()
 
-    private let baseURL = "http://localhost:8080/api/v1/tickets"
+    private var baseURL: String { AppConfig.baseURL + "/api/v1/tickets" }
 
     private init() {}
 

@@ -71,6 +71,7 @@ struct DashboardView: View {
     @State private var analysisResult: String = ""
     @State private var showResultSheet = false
     @State private var showScanner = false
+    @State private var showManualEntry = false
     @State private var isPhotosPickerPresented = false
     @State private var isScanReady = false
 
@@ -164,6 +165,7 @@ struct DashboardView: View {
                         }
 
                         smartCardsSection
+                        HomeHighlightsSection(isDashboardLoading: dashboardViewModel.isLoading)
                         spendingAnalyticsSection
                         merchantAnalyticsSection
                         historyListView
@@ -247,6 +249,12 @@ struct DashboardView: View {
                     LoadingSheetView()
                         .presentationDetents([.medium])
                 }
+            }
+            .sheet(isPresented: $showManualEntry) {
+                ManualTicketView(onSaved: {
+                    refreshAfterTicketSave()
+                })
+                .environmentObject(sessionManager)
             }
             .fullScreenCover(isPresented: $showScanner) {
                 ScannerView(isPresented: $showScanner) { capturedImage in
@@ -586,6 +594,12 @@ struct DashboardView: View {
                     isPhotosPickerPresented = true
                 } label: {
                     Label("Galerie photos", systemImage: "photo.on.rectangle")
+                }
+
+                Button {
+                    showManualEntry = true
+                } label: {
+                    Label("Saisie manuelle", systemImage: "square.and.pencil")
                 }
             } label: {
                 HStack(spacing: 12) {
@@ -973,7 +987,7 @@ struct TicketRow: View {
             Spacer()
 
             VStack(alignment: .trailing, spacing: 6) {
-                Text(String(format: "%.2f €", totalAmount))
+                Text(AppFormat.money(totalAmount))
                     .font(.system(size: 16, weight: .bold, design: .rounded))
                     .foregroundColor(EconomofarUI.textPrimary)
 
@@ -1010,6 +1024,12 @@ struct ResultView: View {
     @State private var ticketCategory: String = "Alimentation"
     @State private var editableItems: [EditableTicketItemDraft] = []
     @State private var hasParsed = false
+    @State private var paymentMethod: String = "Carte"
+    @State private var isSaving = false
+    @State private var saveErrorMessage: String? = nil
+    @State private var duplicateMessage: String? = nil
+    @State private var ignoreDuplicate = false
+    @State private var suggestionHint: String? = nil
 
     private var computedItemsTotal: Double {
         editableItems.reduce(0.0) { partialResult, item in
@@ -1018,7 +1038,7 @@ struct ResultView: View {
     }
 
     private var displayItemsTotal: String {
-        String(format: "%.2f €", computedItemsTotal)
+        AppFormat.money(computedItemsTotal)
     }
 
     var body: some View {
@@ -1041,10 +1061,46 @@ struct ResultView: View {
             }
             .navigationTitle("Validation")
             .navigationBarTitleDisplayMode(.inline)
+            .alert(
+                "Enregistrement impossible",
+                isPresented: Binding(
+                    get: { saveErrorMessage != nil },
+                    set: { newValue in
+                        if !newValue {
+                            saveErrorMessage = nil
+                        }
+                    }
+                )
+            ) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(saveErrorMessage ?? "")
+            }
+            .confirmationDialog(
+                "Ticket peut-être déjà enregistré",
+                isPresented: Binding(
+                    get: { duplicateMessage != nil },
+                    set: { newValue in
+                        if !newValue {
+                            duplicateMessage = nil
+                        }
+                    }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Enregistrer quand même") {
+                    ignoreDuplicate = true
+                    saveEditableTicket()
+                }
+
+                Button("Annuler", role: .cancel) { }
+            } message: {
+                Text(duplicateMessage ?? "")
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Annuler") {
-                        isPresented = false
+                        discardScan()
                     }
                     .foregroundColor(EconomofarUI.textSecondary)
                 }
@@ -1052,7 +1108,9 @@ struct ResultView: View {
             .onAppear {
                 if !hasParsed {
                     parseRobustJSON()
+                    normalizePurchaseDate()
                     hasParsed = true
+                    applyMerchantSuggestion()
                 }
             }
         }
@@ -1115,12 +1173,35 @@ struct ResultView: View {
                 text: $merchantName
             )
 
-            StyledTextField(
-                title: "Date",
-                placeholder: "YYYY-MM-DD",
-                icon: "calendar",
-                text: $purchaseDate
-            )
+            if let suggestionHint {
+                Text(suggestionHint)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundColor(EconomofarUI.accent)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Date", systemImage: "calendar")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundColor(EconomofarUI.textSecondary)
+
+                DatePicker(
+                    "Date",
+                    selection: purchaseDateBinding,
+                    in: ...Date(),
+                    displayedComponents: .date
+                )
+                .labelsHidden()
+                .datePickerStyle(.compact)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+                .background(EconomofarUI.cardSoft)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(EconomofarUI.border, lineWidth: 1)
+                }
+            }
 
             VStack(alignment: .leading, spacing: 8) {
                 Label("Catégorie du ticket", systemImage: "tag")
@@ -1144,7 +1225,28 @@ struct ResultView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Label("Total", systemImage: "eurosign.circle")
+                Label("Moyen de paiement", systemImage: "creditcard")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundColor(EconomofarUI.textSecondary)
+
+                Picker("Moyen de paiement", selection: $paymentMethod) {
+                    ForEach(EconomofarPaymentMethods.all, id: \.self) { method in
+                        Text(method).tag(method)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+                .background(EconomofarUI.cardSoft)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(EconomofarUI.border, lineWidth: 1)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Total", systemImage: AppFormat.currencyIcon)
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .foregroundColor(EconomofarUI.textSecondary)
 
@@ -1274,33 +1376,166 @@ struct ResultView: View {
         .disabled(ticketService.isLoading)
     }
 
-    private func saveEditableTicket() {
+    private static let isoDayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    /// Binding used by the DatePicker. The saved value stays the "yyyy-MM-dd" string.
+    private var purchaseDateBinding: Binding<Date> {
+        Binding(
+            get: {
+                Self.isoDayFormatter.date(
+                    from: purchaseDate.trimmingCharacters(in: .whitespacesAndNewlines)
+                ) ?? Date()
+            },
+            set: { newValue in
+                purchaseDate = Self.isoDayFormatter.string(from: newValue)
+            }
+        )
+    }
+
+    /// Makes sure the date shown by the DatePicker is exactly the date that will be saved.
+    private func normalizePurchaseDate() {
+        let trimmed = purchaseDate.trimmingCharacters(in: .whitespacesAndNewlines)
+        let firstTen = String(trimmed.prefix(10))
+
+        if trimmed.count >= 10, Self.isoDayFormatter.date(from: firstTen) != nil {
+            purchaseDate = firstTen
+        } else {
+            purchaseDate = Self.isoDayFormatter.string(from: Date())
+        }
+    }
+
+    /// Cancel: closes the sheet and removes the unfinished ticket from the server.
+    private func discardScan() {
+        isPresented = false
+
         guard let token = sessionManager.token else {
             return
         }
 
-        let finalMerchant = merchantName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        ? "Commerçant inconnu"
-        : merchantName.trimmingCharacters(in: .whitespacesAndNewlines)
+        Task {
+            await ticketService.discardActiveScan(token: token)
+        }
+    }
 
-        let finalDate = purchaseDate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        ? ISO8601DateFormatter().string(from: Date())
-        : purchaseDate.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func applyMerchantSuggestion() {
+        let merchant = merchantName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !merchant.isEmpty, let token = sessionManager.token else {
+            return
+        }
+
+        let categoryBefore = ticketCategory
+        let paymentBefore = paymentMethod
+
+        Task { @MainActor in
+            guard let suggestion = await MerchantSuggestionService.shared.fetch(
+                merchant: merchant,
+                token: token
+            ) else {
+                return
+            }
+
+            guard !isSaving,
+                  merchantName.trimmingCharacters(in: .whitespacesAndNewlines) == merchant else {
+                return
+            }
+
+            var categoryApplied = false
+            var paymentApplied = false
+
+            if let suggested = suggestion.category,
+               let category = EconomofarCategories.all.first(where: {
+                   $0.compare(suggested, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+               }),
+               ticketCategory == categoryBefore,
+               category != ticketCategory {
+                ticketCategory = category
+                categoryApplied = true
+            }
+
+            if let suggested = suggestion.paymentMethod,
+               let method = EconomofarPaymentMethods.all.first(where: {
+                   $0.compare(suggested, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+               }),
+               paymentMethod == paymentBefore,
+               method != paymentMethod {
+                paymentMethod = method
+                paymentApplied = true
+            }
+
+            if categoryApplied || paymentApplied {
+                let what: String
+
+                if categoryApplied && paymentApplied {
+                    what = "Catégorie et moyen de paiement pré-remplis"
+                } else if categoryApplied {
+                    what = "Catégorie pré-remplie"
+                } else {
+                    what = "Moyen de paiement pré-rempli"
+                }
+
+                suggestionHint = "\(what) d’après vos tickets précédents chez \(merchant)."
+            }
+        }
+    }
+
+    private func saveEditableTicket() {
+        guard let token = sessionManager.token, !isSaving else {
+            return
+        }
+
+        let trimmedMerchant = merchantName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalMerchant = trimmedMerchant.isEmpty ? "Commerçant inconnu" : trimmedMerchant
+
+        let trimmedDate = purchaseDate.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalDate = trimmedDate.isEmpty ? ISO8601DateFormatter().string(from: Date()) : trimmedDate
 
         let finalItems = editableItems.map { $0.request }
 
-        ticketService.saveValidatedTicket(
-            merchant: finalMerchant,
-            amount: totalAmount,
-            purchaseDate: finalDate,
-            category: ticketCategory,
-            items: finalItems,
-            rawOcr: resultText,
-            token: token
-        )
+        isSaving = true
+        saveErrorMessage = nil
 
-        onSaved?()
-        isPresented = false
+        Task { @MainActor in
+            if !ignoreDuplicate,
+               let duplicate = await ticketService.findDuplicate(
+                   merchant: finalMerchant,
+                   amount: totalAmount,
+                   purchaseDate: finalDate,
+                   token: token
+               ) {
+                isSaving = false
+                duplicateMessage = duplicate
+                return
+            }
+
+            ignoreDuplicate = false
+
+            let success = await ticketService.saveValidatedTicketAndWait(
+                merchant: finalMerchant,
+                amount: totalAmount,
+                purchaseDate: finalDate,
+                category: ticketCategory,
+                paymentMethod: paymentMethod,
+                items: finalItems,
+                rawOcr: resultText,
+                token: token
+            )
+
+            isSaving = false
+
+            if success {
+                onSaved?()
+                isPresented = false
+            } else {
+                saveErrorMessage = ticketService.errorMessage ?? "Impossible d'enregistrer le ticket. Réessayez."
+            }
+        }
     }
 
     private func addNewItem() {
@@ -1668,7 +1903,7 @@ struct ParsedItemRow: View {
                     .clipShape(Capsule())
             }
 
-            Text(String(format: "%.2f €", item.price))
+            Text(AppFormat.money(item.price))
                 .font(.system(size: 14, weight: .bold, design: .rounded))
                 .foregroundColor(EconomofarUI.textPrimary)
         }
@@ -1774,7 +2009,7 @@ struct TicketDetailView: View {
                         .font(.system(size: 13, weight: .medium, design: .rounded))
                         .foregroundColor(EconomofarUI.textSecondary)
 
-                    Text(String(format: "%.2f €", totalAmount))
+                    Text(AppFormat.money(totalAmount))
                         .font(.system(size: 34, weight: .bold, design: .rounded))
                         .foregroundColor(EconomofarUI.textPrimary)
                 }

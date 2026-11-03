@@ -28,6 +28,7 @@ struct RegisterView: View {
         !lastName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        NewPasswordRules.isAcceptable(password, email: email) &&
         !authService.isLoading
     }
 
@@ -142,6 +143,19 @@ struct RegisterView: View {
                 }
 
                 passwordField
+
+                if password.isEmpty {
+                    Text("8 caractères minimum, avec au moins une lettre et un chiffre.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundColor(RegisterDesign.textTertiary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    NewPasswordChecklist(
+                        rules: NewPasswordRules.evaluate(password, email: email),
+                        pendingColor: RegisterDesign.textTertiary,
+                        textColor: RegisterDesign.textSecondary
+                    )
+                }
             }
 
             if !authService.errorMessage.isEmpty {

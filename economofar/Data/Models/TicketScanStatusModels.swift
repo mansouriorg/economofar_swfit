@@ -68,6 +68,7 @@ enum TicketScanStatus: String, Codable, CaseIterable {
 
 struct TicketUploadResponse: Codable {
     let ticketId: String?
+    let imageUrl: String?
     let scanStatus: TicketScanStatus?
     let scanErrorMessage: String?
     let scanStartedAt: String?

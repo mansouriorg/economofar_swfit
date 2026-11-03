@@ -83,7 +83,7 @@ final class DashboardViewModel: ObservableObject {
 
     var budgetRemainingText: String {
         guard let insights else {
-            return "0,00 €"
+            return AppFormat.money(0)
         }
 
         guard let monthlyBudget = insights.monthlyBudget, monthlyBudget > 0 else {
@@ -211,7 +211,7 @@ final class DashboardViewModel: ObservableObject {
 
     var highestReceiptText: String {
         guard let insights else {
-            return "0,00 €"
+            return AppFormat.money(0)
         }
 
         if let merchant = insights.highestReceiptMerchant, !merchant.isEmpty {
@@ -225,17 +225,17 @@ final class DashboardViewModel: ObservableObject {
 
     func amountText(_ value: Double?) -> String {
         guard let value else {
-            return "0,00 €"
+            return AppFormat.money(0)
         }
 
         let formatter = NumberFormatter()
         formatter.numberStyle = .currency
-        formatter.currencyCode = "EUR"
-        formatter.locale = Locale(identifier: "fr_FR")
+        formatter.currencyCode = AppFormat.currencyCode
+        formatter.locale = AppFormat.locale
         formatter.maximumFractionDigits = 2
         formatter.minimumFractionDigits = 2
 
-        return formatter.string(from: NSNumber(value: value)) ?? String(format: "%.2f €", value)
+        return formatter.string(from: NSNumber(value: value)) ?? AppFormat.money(value)
     }
 
     func simpleAmountText(_ value: Double?) -> String {
